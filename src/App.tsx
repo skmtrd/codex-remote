@@ -93,6 +93,8 @@ const reasoningLabels: Record<ReasoningEffort, string> = {
 };
 const maxImageAttachments = 6;
 const maxImageBytes = 8 * 1024 * 1024;
+const autoSyncIntervalMs = 2000;
+const activeRunStates: RunState[] = ["booting", "connecting", "running", "streaming", "approval"];
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return reasoningEfforts.includes(value as ReasoningEffort);
@@ -150,6 +152,14 @@ function makeLocalEntry(role: ChatEntry["role"], text: string): ChatEntry {
     text,
     createdAt: Date.now(),
   };
+}
+
+function sameHistory(left: ChatEntry[], right: ChatEntry[]) {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const next = right[index];
+    return entry.role === next.role && entry.text === next.text;
+  });
 }
 
 function authHeaders(token: string) {
@@ -513,6 +523,9 @@ function App() {
   const [lastError, setLastError] = useState(token ? "" : "token がありません。");
   const [threadBusy, setThreadBusy] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const selectedThreadIdRef = useRef(selectedThreadId);
+  const runStateRef = useRef(runState);
+  const syncInFlightRef = useRef(false);
   const assistantIdRef = useRef<string>("");
   const reasoningIdRef = useRef<string>("");
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -564,6 +577,14 @@ function App() {
     ];
   }, [models, selectedEffort, selectedModel]);
 
+  useEffect(() => {
+    selectedThreadIdRef.current = selectedThreadId;
+  }, [selectedThreadId]);
+
+  useEffect(() => {
+    runStateRef.current = runState;
+  }, [runState]);
+
   const updateThreadUrl = useCallback((threadId: string) => {
     const next = new URL(window.location.href);
     next.searchParams.delete("token");
@@ -602,13 +623,13 @@ function App() {
     });
   }, []);
 
-  const loadThreads = useCallback(async () => {
+  const loadThreads = useCallback(async (silent = false) => {
     if (!token) return;
     try {
       const result = await apiGet<{ data: ThreadSummary[] }>("/api/threads", token);
       setThreads(result.data);
     } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error));
+      if (!silent) setLastError(error instanceof Error ? error.message : String(error));
     }
   }, [token]);
 
@@ -629,7 +650,7 @@ function App() {
   }, [token]);
 
   const connect = useCallback(
-    (threadId: string) => {
+    (threadId: string, options: { preserveMessages?: boolean; silent?: boolean } = {}) => {
       if (!token) {
         setRunState("error");
         setLastError("起動時に表示された token 付き URL から開いてください。");
@@ -640,7 +661,7 @@ function App() {
       assistantIdRef.current = "";
       reasoningIdRef.current = "";
       setPendingApproval(null);
-      setMessages([]);
+      if (!options.preserveMessages) setMessages([]);
       setRunState("connecting");
       setLastError("");
 
@@ -684,7 +705,7 @@ function App() {
           return;
         }
         if (msg.type === "status") {
-          appendEntry(msg.entry);
+          if (!options.silent) appendEntry(msg.entry);
           return;
         }
         if (msg.type === "approval") {
@@ -723,6 +744,28 @@ function App() {
     [appendAssistantDelta, appendEntry, appendReasoningDelta, loadThreads, token, updateThreadUrl],
   );
 
+  const syncSelectedThread = useCallback(async () => {
+    const threadId = selectedThreadIdRef.current;
+    if (!token || !threadId || syncInFlightRef.current || activeRunStates.includes(runStateRef.current)) return;
+    syncInFlightRef.current = true;
+    try {
+      const result = await apiGet<{ threadId: string; history: ChatEntry[] }>(`/api/thread?thread=${encodeURIComponent(threadId)}`, token);
+      if (selectedThreadIdRef.current !== threadId || result.threadId !== threadId) return;
+      setMessages((current) => (sameHistory(current, result.history) ? current : result.history));
+    } catch {
+      // Background sync must stay invisible; foreground actions still surface errors.
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  }, [token]);
+
+  const reconnectIfNeeded = useCallback(() => {
+    if (!token || activeRunStates.includes(runStateRef.current)) return;
+    const ws = wsRef.current;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    connect(selectedThreadIdRef.current, { preserveMessages: true, silent: true });
+  }, [connect, token]);
+
   useEffect(() => {
     if (token) {
       localStorage.setItem("codexRemoteToken", token);
@@ -750,6 +793,24 @@ function App() {
     connect(initialThread);
     return () => wsRef.current?.close();
   }, [connect, loadModels, loadThreads, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const syncVisibleTab = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadThreads(true);
+      void syncSelectedThread();
+      reconnectIfNeeded();
+    };
+    const interval = window.setInterval(syncVisibleTab, autoSyncIntervalMs);
+    window.addEventListener("focus", syncVisibleTab);
+    document.addEventListener("visibilitychange", syncVisibleTab);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", syncVisibleTab);
+      document.removeEventListener("visibilitychange", syncVisibleTab);
+    };
+  }, [loadThreads, reconnectIfNeeded, syncSelectedThread, token]);
 
   useEffect(() => {
     if (!models.length) return;
