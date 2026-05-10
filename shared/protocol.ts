@@ -39,6 +39,8 @@ export type AccessModeId = "full" | "review" | "read-only";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+export type ApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+
 export type PromptOptions = {
   model?: string;
   effort?: ReasoningEffort;
@@ -53,7 +55,7 @@ export type BridgeClientMessage =
     }
   | {
       type: "approval";
-      decision: "accept" | "decline";
+      decision: ApprovalDecision;
       request: unknown;
     };
 

@@ -15,6 +15,7 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type {
   AccessModeId,
+  ApprovalDecision,
   BridgeClientMessage,
   BridgeServerMessage,
   ChatEntry,
@@ -109,6 +110,21 @@ const markdownComponents: Components = {
   },
 };
 
+type ApprovalInfo = {
+  kind: string;
+  title: string;
+  reason?: string;
+  command?: string;
+  cwd?: string;
+  grantRoot?: string;
+  network?: string;
+  permissions?: string;
+  actions: string[];
+  fileChanges: string[];
+  canAcceptForSession: boolean;
+  raw: string;
+};
+
 function makeLocalEntry(role: ChatEntry["role"], text: string): ChatEntry {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -154,6 +170,128 @@ function compactId(id: string) {
   return id.length > 14 ? `${id.slice(0, 7)}...${id.slice(-5)}` : id;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function nonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function compactJson(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function approvalHasDecision(params: Record<string, unknown>, decision: ApprovalDecision) {
+  return Array.isArray(params.availableDecisions) && params.availableDecisions.some((value) => value === decision);
+}
+
+function formatCommandAction(value: unknown) {
+  const action = asRecord(value);
+  if (!action) return compactJson(value);
+  const type = nonEmptyString(action.type);
+  const command = nonEmptyString(action.command) || nonEmptyString(action.cmd);
+  if (type === "read") return `read: ${nonEmptyString(action.path) || nonEmptyString(action.name) || command || "file"}`;
+  if (type === "listFiles" || type === "list_files") return `list: ${nonEmptyString(action.path) || command || "files"}`;
+  if (type === "search") {
+    const query = nonEmptyString(action.query) || "";
+    const target = nonEmptyString(action.path) || "workspace";
+    return `search: ${query || command || "query"} in ${target}`;
+  }
+  return command || compactJson(value);
+}
+
+function formatFileChange(filePath: string, value: unknown) {
+  const change = asRecord(value);
+  const type = nonEmptyString(change?.type) || "change";
+  const movePath = nonEmptyString(change?.move_path);
+  if (type === "update" && movePath) return `update: ${filePath} -> ${movePath}`;
+  return `${type}: ${filePath}`;
+}
+
+function describeApproval(request: unknown): ApprovalInfo {
+  const rpc = asRecord(request) || {};
+  const params = asRecord(rpc.params) || {};
+  const method = nonEmptyString(rpc.method) || "approval";
+  const raw = JSON.stringify(request, null, 2) || "";
+  const reason = nonEmptyString(params.reason);
+  const grantRoot = nonEmptyString(params.grantRoot);
+  const cwd = nonEmptyString(params.cwd);
+  const networkContext = asRecord(params.networkApprovalContext);
+  const network = networkContext
+    ? [nonEmptyString(networkContext.protocol), nonEmptyString(networkContext.host)].filter(Boolean).join("://")
+    : undefined;
+
+  if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
+    const commandValue = params.command;
+    const command = Array.isArray(commandValue) ? commandValue.map(String).join(" ") : nonEmptyString(commandValue);
+    const actionValues = Array.isArray(params.commandActions)
+      ? params.commandActions
+      : Array.isArray(params.parsedCmd)
+        ? params.parsedCmd
+        : [];
+    return {
+      kind: "Command",
+      title: "コマンド実行の承認",
+      reason,
+      command,
+      cwd,
+      network,
+      grantRoot,
+      permissions: params.additionalPermissions ? compactJson(params.additionalPermissions) : undefined,
+      actions: actionValues.map(formatCommandAction),
+      fileChanges: [],
+      canAcceptForSession:
+        approvalHasDecision(params, "acceptForSession") || Boolean(params.proposedExecpolicyAmendment) || Boolean(params.proposedNetworkPolicyAmendments),
+      raw,
+    };
+  }
+
+  if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
+    const fileChanges = asRecord(params.fileChanges);
+    return {
+      kind: "Files",
+      title: "ファイル変更の承認",
+      reason,
+      cwd,
+      grantRoot,
+      actions: [],
+      fileChanges: fileChanges ? Object.entries(fileChanges).map(([filePath, change]) => formatFileChange(filePath, change)) : [],
+      canAcceptForSession: Boolean(grantRoot),
+      raw,
+    };
+  }
+
+  if (method === "item/permissions/requestApproval") {
+    return {
+      kind: "Permissions",
+      title: "権限変更の承認",
+      reason,
+      cwd,
+      permissions: params.permissions ? compactJson(params.permissions) : undefined,
+      actions: [],
+      fileChanges: [],
+      canAcceptForSession: false,
+      raw,
+    };
+  }
+
+  return {
+    kind: "Approval",
+    title: method,
+    reason,
+    cwd,
+    actions: [],
+    fileChanges: [],
+    canAcceptForSession: false,
+    raw,
+  };
+}
+
 function parseModelOption(item: Record<string, unknown>): ModelOption | null {
   const id = String(item.model || item.id || "");
   const label = String(item.displayName || item.model || item.id || "");
@@ -186,6 +324,74 @@ function MessageText({ entry }: { entry: ChatEntry }) {
     <ReactMarkdown components={markdownComponents} rehypePlugins={[rehypeSanitize]} remarkPlugins={[remarkGfm]}>
       {entry.text}
     </ReactMarkdown>
+  );
+}
+
+function ApprovalDetails({ info }: { info: ApprovalInfo }) {
+  return (
+    <div className="approval-content">
+      <div className="approval-heading">
+        <span>{info.kind}</span>
+        <strong>{info.title}</strong>
+      </div>
+      {info.reason && <p className="approval-reason">{info.reason}</p>}
+      <div className="approval-grid">
+        {info.cwd && (
+          <div>
+            <span>CWD</span>
+            <code>{info.cwd}</code>
+          </div>
+        )}
+        {info.network && (
+          <div>
+            <span>Network</span>
+            <code>{info.network}</code>
+          </div>
+        )}
+        {info.grantRoot && (
+          <div>
+            <span>Grant root</span>
+            <code>{info.grantRoot}</code>
+          </div>
+        )}
+      </div>
+      {info.command && (
+        <div className="approval-block">
+          <span>Command</span>
+          <pre>{info.command}</pre>
+        </div>
+      )}
+      {info.actions.length > 0 && (
+        <div className="approval-block">
+          <span>Detected actions</span>
+          <ul>
+            {info.actions.map((action) => (
+              <li key={action}>{action}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {info.fileChanges.length > 0 && (
+        <div className="approval-block">
+          <span>Files</span>
+          <ul>
+            {info.fileChanges.map((change) => (
+              <li key={change}>{change}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {info.permissions && (
+        <div className="approval-block">
+          <span>Permissions</span>
+          <pre>{info.permissions}</pre>
+        </div>
+      )}
+      <details className="approval-raw">
+        <summary>Raw request</summary>
+        <pre>{info.raw}</pre>
+      </details>
+    </div>
   );
 }
 
@@ -228,6 +434,7 @@ function App() {
     () => selectedModelOption?.supportedReasoningEfforts || fallbackReasoningOptions,
     [selectedModelOption],
   );
+  const approvalInfo = useMemo(() => (pendingApproval === null ? null : describeApproval(pendingApproval)), [pendingApproval]);
   const modelOptions = useMemo(() => {
     if (!selectedModel || models.some((model) => model.id === selectedModel)) return models;
     return [
@@ -462,7 +669,7 @@ function App() {
     setPrompt("");
   };
 
-  const decideApproval = (decision: "accept" | "decline") => {
+  const decideApproval = (decision: ApprovalDecision) => {
     const ws = wsRef.current;
     if (!pendingApproval || !ws || ws.readyState !== WebSocket.OPEN) return;
     const message: BridgeClientMessage = { type: "approval", decision, request: pendingApproval };
@@ -576,18 +783,21 @@ function App() {
 
         {pendingApproval !== null && (
           <section className="approval-panel" aria-label="Approval request">
-            <div>
-              <strong>承認リクエスト</strong>
-              <pre>{JSON.stringify(pendingApproval, null, 2) || ""}</pre>
-            </div>
+            {approvalInfo && <ApprovalDetails info={approvalInfo} />}
             <div className="approval-actions">
               <button type="button" className="secondary-button" onClick={() => decideApproval("decline")}>
                 <X size={16} />
                 拒否
               </button>
+              {approvalInfo?.canAcceptForSession && (
+                <button type="button" className="secondary-button" onClick={() => decideApproval("acceptForSession")}>
+                  <Shield size={16} />
+                  セッションで承認
+                </button>
+              )}
               <button type="button" className="primary-button" onClick={() => decideApproval("accept")}>
                 <Check size={16} />
-                承認
+                今回だけ承認
               </button>
             </div>
           </section>

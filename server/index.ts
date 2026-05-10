@@ -13,6 +13,7 @@ import type { RawData } from "ws";
 import {
   newEntry,
   type AccessModeId,
+  type ApprovalDecision,
   type BridgeClientMessage,
   type BridgeServerMessage,
   type ChatEntry,
@@ -313,6 +314,27 @@ function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return ["none", "minimal", "low", "medium", "high", "xhigh"].includes(String(value));
 }
 
+function isApprovalDecision(value: unknown): value is ApprovalDecision {
+  return ["accept", "acceptForSession", "decline", "cancel"].includes(String(value));
+}
+
+function responseDecisionFor(method: string, decision: ApprovalDecision) {
+  if (method === "execCommandApproval" || method === "applyPatchApproval") {
+    if (decision === "accept") return "approved";
+    if (decision === "acceptForSession") return "approved_for_session";
+    if (decision === "cancel") return "abort";
+    return "denied";
+  }
+  return decision;
+}
+
+function approvalStatusText(decision: ApprovalDecision) {
+  if (decision === "accept") return "承認しました。";
+  if (decision === "acceptForSession") return "このセッションで承認しました。";
+  if (decision === "cancel") return "キャンセルしました。";
+  return "拒否しました。";
+}
+
 async function warmHistory(threadId: string) {
   await appServerRequest("thread/read", { threadId, includeTurns: true });
   await appServerRequest("thread/list", {
@@ -560,19 +582,20 @@ class SharedBridge {
     this.request("turn/start", params);
   }
 
-  private approval(request: unknown, decision: "accept" | "decline") {
+  private approval(request: unknown, decision: ApprovalDecision) {
     if (!request || typeof request !== "object") return;
     const requestMsg = request as RpcMessage;
     if (!requestMsg.id || !requestMsg.method) return;
+    const normalizedDecision = isApprovalDecision(decision) ? decision : "decline";
     this.upstream.send(
       JSON.stringify({
         id: requestMsg.id,
-        result: { decision: decision === "accept" ? "accept" : "decline" },
+        result: { decision: responseDecisionFor(requestMsg.method, normalizedDecision) },
       }),
     );
     this.emit({
       type: "status",
-      entry: newEntry("status", decision === "accept" ? "承認しました。" : "拒否しました。"),
+      entry: newEntry("status", approvalStatusText(normalizedDecision)),
     });
   }
 }
