@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   FileSearch,
+  Folder,
   GitFork,
   ImagePlus,
   Menu,
@@ -549,6 +550,7 @@ function App() {
   const assistantIdRef = useRef<string>("");
   const reasoningIdRef = useRef<string>("");
   const logRef = useRef<HTMLDivElement | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selectedThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId),
@@ -562,6 +564,17 @@ function App() {
       [thread.title, thread.cwd || "", thread.preview || "", thread.id].some((value) => value.toLowerCase().includes(query)),
     );
   }, [search, threads]);
+
+  const groupedThreads = useMemo(() => {
+    const groups = new Map<string, ThreadSummary[]>();
+    for (const thread of filteredThreads) {
+      const name = projectName(thread.cwd);
+      groups.set(name, [...(groups.get(name) || []), thread]);
+    }
+    return [...groups.entries()]
+      .map(([name, items]) => ({ name, items }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [filteredThreads]);
 
   const currentTitle = selectedThread?.title || (selectedThreadId ? compactId(selectedThreadId) : "新しい thread");
   const selectedModelOption = useMemo(() => models.find((model) => model.id === selectedModel), [models, selectedModel]);
@@ -846,6 +859,16 @@ function App() {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) return;
+    const maxHeight = 220;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${Math.max(nextHeight, 58)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [prompt]);
+
   const selectThread = (threadId: string) => {
     setSelectedThreadId(threadId);
     updateThreadUrl(threadId);
@@ -1050,21 +1073,27 @@ function App() {
         />
 
         <div className="thread-list" aria-label="Threads">
-          {filteredThreads.map((thread) => (
-            <button
-              className={`thread-row ${thread.id === selectedThreadId ? "active" : ""}`}
-              type="button"
-              key={thread.id}
-              onClick={() => selectThread(thread.id)}
-            >
-              <span className="thread-title">{thread.title}</span>
-              <span className="thread-meta">
-                {projectName(thread.cwd)}
-                {thread.updatedAt ? ` · ${relativeTime(thread.updatedAt)}` : ""}
-              </span>
-            </button>
+          {groupedThreads.map((group) => (
+            <section className="project-stack" key={group.name}>
+              <div className="project-stack-heading">
+                <Folder size={15} />
+                <span>{group.name}</span>
+                <b>{group.items.length}</b>
+              </div>
+              {group.items.map((thread) => (
+                <button
+                  className={`thread-row ${thread.id === selectedThreadId ? "active" : ""}`}
+                  type="button"
+                  key={thread.id}
+                  onClick={() => selectThread(thread.id)}
+                >
+                  <span className="thread-title">{thread.title}</span>
+                  <span className="thread-meta">{thread.updatedAt ? relativeTime(thread.updatedAt) : compactId(thread.id)}</span>
+                </button>
+              ))}
+            </section>
           ))}
-          {filteredThreads.length === 0 && <div className="empty-list">thread なし</div>}
+          {groupedThreads.length === 0 && <div className="empty-list">thread なし</div>}
         </div>
 
         <div className="sidebar-status">
@@ -1088,30 +1117,30 @@ function App() {
               {runStateLabel[runState]}
             </span>
             {canInterrupt && (
-              <button className="icon-button danger" type="button" onClick={interruptTurn} aria-label="停止">
+              <button className="icon-button danger interrupt-action" type="button" onClick={interruptTurn} aria-label="停止">
                 <Square size={15} />
               </button>
             )}
             {selectedThreadId && (
               <>
-                <button className="icon-button" type="button" onClick={() => void compactThread()} disabled={threadBusy} aria-label="compact">
+                <button className="icon-button thread-action" type="button" onClick={() => void compactThread()} disabled={threadBusy} aria-label="compact">
                   <Minimize2 size={16} />
                 </button>
-                <button className="icon-button" type="button" onClick={() => void forkThread()} disabled={threadBusy} aria-label="fork">
+                <button className="icon-button thread-action" type="button" onClick={() => void forkThread()} disabled={threadBusy} aria-label="fork">
                   <GitFork size={16} />
                 </button>
-                <button className="icon-button danger" type="button" onClick={() => void rollbackThread()} disabled={threadBusy} aria-label="rollback">
+                <button className="icon-button danger thread-action" type="button" onClick={() => void rollbackThread()} disabled={threadBusy} aria-label="rollback">
                   <Undo2 size={16} />
                 </button>
-                <button className="icon-button" type="button" onClick={() => void renameThread()} aria-label="名前を変更">
+                <button className="icon-button thread-action" type="button" onClick={() => void renameThread()} aria-label="名前を変更">
                   <Pencil size={16} />
                 </button>
-                <button className="icon-button danger" type="button" onClick={() => void archiveThread()} aria-label="アーカイブ">
+                <button className="icon-button danger thread-action" type="button" onClick={() => void archiveThread()} aria-label="アーカイブ">
                   <Archive size={16} />
                 </button>
               </>
             )}
-            <button className="icon-button" type="button" onClick={() => connect(selectedThreadId)} aria-label="再接続">
+            <button className="icon-button reconnect-action" type="button" onClick={() => connect(selectedThreadId)} aria-label="再接続">
               <RefreshCcw size={17} />
             </button>
             <button className="icon-button mobile-menu" type="button" onClick={() => setDrawerOpen(true)} aria-label="メニュー">
@@ -1166,102 +1195,63 @@ function App() {
         )}
 
         <footer className="composer-shell">
-          <div className="control-row">
-            <div className="model-controls">
-              <label className="select-control model-control">
-                <span>Model</span>
-                <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
-                  {modelOptions.map((model) => (
-                    <option value={model.id} key={model.id}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={15} />
+          <div className="composer">
+            <div className="file-mention-row">
+              <label className="file-search-box">
+                <Search size={14} />
+                <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="参照ファイルを検索" />
               </label>
-              <label className="select-control effort-control">
-                <span>Thinking</span>
-                <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value as ReasoningEffort)}>
-                  {selectedEffortOptions.map((option) => (
-                    <option value={option.id} key={option.id} title={option.description}>
-                      {reasoningLabels[option.id]}
-                    </option>
+              {fileSearchLoading && <span className="file-search-state">検索中</span>}
+              {fileMatches.length > 0 && (
+                <div className="file-results">
+                  {fileMatches.map((file) => (
+                    <button type="button" key={`${file.root}:${file.path}`} onClick={() => addMention(file)}>
+                      <FileSearch size={14} />
+                      <span>{file.path}</span>
+                    </button>
                   ))}
-                </select>
-                <ChevronDown size={15} />
-              </label>
+                </div>
+              )}
             </div>
-            <div className="access-tabs" aria-label="Access mode">
-              {accessModes.map((mode) => (
-                <button
-                  type="button"
-                  className={mode.id === accessMode ? "active" : ""}
-                  key={mode.id}
-                  onClick={() => setAccessMode(mode.id)}
-                  title={mode.label}
-                >
-                  {mode.short}
-                </button>
-              ))}
-            </div>
-          </div>
 
-          <div className="file-mention-row">
-            <label className="file-search-box">
-              <Search size={14} />
-              <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="参照ファイルを検索" />
-            </label>
-            {fileSearchLoading && <span className="file-search-state">検索中</span>}
-            {fileMatches.length > 0 && (
-              <div className="file-results">
-                {fileMatches.map((file) => (
-                  <button type="button" key={`${file.root}:${file.path}`} onClick={() => addMention(file)}>
+            {mentions.length > 0 && (
+              <div className="mention-strip" aria-label="参照ファイル">
+                {mentions.map((mention) => (
+                  <div className="mention-chip" key={mention.id}>
                     <FileSearch size={14} />
-                    <span>{file.path}</span>
-                  </button>
+                    <span>{mention.path}</span>
+                    <button
+                      type="button"
+                      aria-label={`${mention.name} を削除`}
+                      onClick={() => setMentions((current) => current.filter((item) => item.id !== mention.id))}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
-          </div>
 
-          {mentions.length > 0 && (
-            <div className="mention-strip" aria-label="参照ファイル">
-              {mentions.map((mention) => (
-                <div className="mention-chip" key={mention.id}>
-                  <FileSearch size={14} />
-                  <span>{mention.path}</span>
-                  <button
-                    type="button"
-                    aria-label={`${mention.name} を削除`}
-                    onClick={() => setMentions((current) => current.filter((item) => item.id !== mention.id))}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+            {attachments.length > 0 && (
+              <div className="attachment-strip" aria-label="添付画像">
+                {attachments.map((attachment) => (
+                  <div className="attachment-chip" key={attachment.id}>
+                    <img src={attachment.dataUrl} alt="" />
+                    <span>{attachment.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`${attachment.name} を削除`}
+                      onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
-          {attachments.length > 0 && (
-            <div className="attachment-strip" aria-label="添付画像">
-              {attachments.map((attachment) => (
-                <div className="attachment-chip" key={attachment.id}>
-                  <img src={attachment.dataUrl} alt="" />
-                  <span>{attachment.name}</span>
-                  <button
-                    type="button"
-                    aria-label={`${attachment.name} を削除`}
-                    onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="composer">
             <textarea
+              ref={promptRef}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
@@ -1270,25 +1260,71 @@ function App() {
                   sendPrompt();
                 }
               }}
-              placeholder="Codex に送る"
-              rows={3}
+              placeholder="フォローアップの変更を求める"
+              rows={1}
             />
-            <label
-              className={`attach-button ${!selectedModelSupportsImage ? "disabled" : ""}`}
-              title={selectedModelSupportsImage ? "画像を添付" : "この model は画像入力に未対応です"}
-            >
-              <ImagePlus size={18} />
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                disabled={!selectedModelSupportsImage}
-                onChange={(event) => void addAttachments(event.currentTarget.files, event.currentTarget)}
-              />
-            </label>
-            <button className="send-button" type="button" onClick={sendPrompt} disabled={(!prompt.trim() && attachments.length === 0 && mentions.length === 0) || runState === "connecting"}>
-              <Send size={18} />
-            </button>
+
+            <div className="composer-toolbar">
+              <div className="composer-toolbar-left">
+                <label
+                  className={`attach-button ${!selectedModelSupportsImage ? "disabled" : ""}`}
+                  title={selectedModelSupportsImage ? "画像を添付" : "この model は画像入力に未対応です"}
+                >
+                  <ImagePlus size={18} />
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    multiple
+                    disabled={!selectedModelSupportsImage}
+                    onChange={(event) => void addAttachments(event.currentTarget.files, event.currentTarget)}
+                  />
+                </label>
+                <label className="select-control access-control">
+                  <Shield size={14} />
+                  <select value={accessMode} onChange={(event) => setAccessMode(event.target.value as AccessModeId)}>
+                    {accessModes.map((mode) => (
+                      <option value={mode.id} key={mode.id}>
+                        {mode.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} />
+                </label>
+              </div>
+
+              <div className="composer-toolbar-right">
+                <label className="select-control model-control">
+                  <span>Model</span>
+                  <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
+                    {modelOptions.map((model) => (
+                      <option value={model.id} key={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} />
+                </label>
+                <label className="select-control effort-control">
+                  <Sparkles size={14} />
+                  <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value as ReasoningEffort)}>
+                    {selectedEffortOptions.map((option) => (
+                      <option value={option.id} key={option.id} title={option.description}>
+                        {reasoningLabels[option.id]}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} />
+                </label>
+                <button
+                  className="send-button"
+                  type="button"
+                  onClick={sendPrompt}
+                  disabled={(!prompt.trim() && attachments.length === 0 && mentions.length === 0) || runState === "connecting"}
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+            </div>
           </div>
         </footer>
       </section>

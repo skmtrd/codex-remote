@@ -1,22 +1,22 @@
 :root {
-  --app-bg: #f1f5f9;
-  --main: #fbfdff;
-  --sidebar: #f7f8fa;
-  --surface: #ffffff;
-  --field: #ffffff;
-  --text: #334155;
-  --text-strong: #0f172a;
-  --muted: #7a8797;
-  --muted-strong: #4b5563;
-  --line: #dfe5ec;
-  --selected: #eaf4ff;
-  --selected-line: #b8d8ff;
-  --hover: rgba(15, 23, 42, 0.055);
-  --button: #273449;
+  --app-bg: #211f2a;
+  --main: #282531;
+  --sidebar: #263c4a;
+  --surface: #373341;
+  --field: #302c38;
+  --text: #d7d1de;
+  --text-strong: #f3edf8;
+  --muted: #9b94a8;
+  --muted-strong: #c5bdcf;
+  --line: rgba(229, 221, 239, 0.12);
+  --selected: rgba(229, 221, 239, 0.1);
+  --selected-line: rgba(229, 221, 239, 0.22);
+  --hover: rgba(244, 238, 249, 0.075);
+  --button: rgba(244, 238, 249, 0.09);
   --button-text: #ffffff;
-  --focus: #2f80ed;
-  --focus-ring: rgba(47, 128, 237, 0.16);
-  --composer-line: #cbd5e1;
+  --focus: #8fb8ff;
+  --focus-ring: rgba(143, 184, 255, 0.18);
+  --composer-line: rgba(244, 238, 249, 0.16);
   --sans:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
