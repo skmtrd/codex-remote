@@ -362,7 +362,97 @@
   font-size: 14px;
   line-height: 1.55;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+}
+
+.message-body > :first-child,
+.message-body > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.message-body > :last-child,
+.message-body > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.message-body p,
+.message-body ul,
+.message-body ol,
+.message-body blockquote,
+.message-body pre,
+.message-body table {
+  margin: 0 0 10px;
+}
+
+.message-body ul,
+.message-body ol {
+  padding-left: 20px;
+}
+
+.message-body li + li {
+  margin-top: 3px;
+}
+
+.message-body a {
+  color: #1d4ed8;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.message-body blockquote {
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+  color: var(--muted-strong);
+}
+
+.message-body code {
+  border: 1px solid #dbe4ee;
+  border-radius: 5px;
+  padding: 1px 4px;
+  background: #f4f7fb;
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.message-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: #0f172a;
+  color: #e5edf6;
+  font: 12px/1.55 var(--mono);
+  white-space: pre;
+}
+
+.message-body pre code {
+  display: block;
+  overflow: visible;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.message-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-body th,
+.message-body td {
+  border: 1px solid var(--line);
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-body th {
+  background: #f8fafc;
+  font-weight: 650;
 }
 
 .message.status .message-body {
@@ -371,12 +461,14 @@
   color: #7c2d12;
   font-family: var(--mono);
   font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .message.error .message-body {
   border-color: #fecaca;
   background: #fff1f2;
   color: #991b1b;
+  white-space: pre-wrap;
 }
 
 .approval-panel {

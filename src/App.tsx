@@ -10,6 +10,9 @@ import {
   Shield,
   X,
 } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
+import remarkGfm from "remark-gfm";
 import type {
   AccessModeId,
   BridgeClientMessage,
@@ -96,6 +99,16 @@ function uniqueReasoningOptions(options: ReasoningEffortOption[]) {
   });
 }
 
+const markdownComponents: Components = {
+  a({ children, href, ...props }) {
+    return (
+      <a href={href} rel="noreferrer" target="_blank" {...props}>
+        {children}
+      </a>
+    );
+  },
+};
+
 function makeLocalEntry(role: ChatEntry["role"], text: string): ChatEntry {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -165,6 +178,15 @@ function parseModelOption(item: Record<string, unknown>): ModelOption | null {
       : [],
     isDefault: Boolean(item.isDefault),
   };
+}
+
+function MessageText({ entry }: { entry: ChatEntry }) {
+  if (entry.role === "status" || entry.role === "error") return entry.text;
+  return (
+    <ReactMarkdown components={markdownComponents} rehypePlugins={[rehypeSanitize]} remarkPlugins={[remarkGfm]}>
+      {entry.text}
+    </ReactMarkdown>
+  );
 }
 
 function App() {
@@ -545,7 +567,9 @@ function App() {
           {messages.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
               <div className="message-role">{entry.role === "assistant" ? "Codex" : entry.role === "user" ? "You" : "System"}</div>
-              <div className="message-body">{entry.text}</div>
+              <div className="message-body">
+                <MessageText entry={entry} />
+              </div>
             </article>
           ))}
         </div>
