@@ -82,6 +82,13 @@ export type PromptMention = {
   id: string;
   name: string;
   path: string;
+  kind?: "file" | "app" | "plugin" | "mcp";
+};
+
+export type PromptSkill = {
+  id: string;
+  name: string;
+  path: string;
 };
 
 export type BridgeClientMessage =
@@ -90,6 +97,7 @@ export type BridgeClientMessage =
       text: string;
       attachments?: PromptAttachment[];
       mentions?: PromptMention[];
+      skills?: PromptSkill[];
       options: PromptOptions;
     }
   | {

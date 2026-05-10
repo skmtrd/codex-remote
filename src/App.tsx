@@ -29,10 +29,12 @@ import type {
   ApprovalDecision,
   BridgeClientMessage,
   BridgeServerMessage,
+  CapabilitySummary,
   ChatEntry,
   FileSearchResult,
   PromptAttachment,
   PromptMention,
+  PromptSkill,
   ReasoningEffort,
   RunState,
   ServerInfo,
@@ -53,6 +55,26 @@ type ModelOption = {
   supportedReasoningEfforts: ReasoningEffortOption[];
   inputModalities: string[];
   isDefault: boolean;
+};
+
+type ComposerTrigger = "$" | "@";
+
+type ComposerAutocomplete = {
+  trigger: ComposerTrigger;
+  start: number;
+  end: number;
+  query: string;
+};
+
+type ComposerCandidate = {
+  id: string;
+  kind: "skill" | "app" | "file";
+  label: string;
+  value: string;
+  subtitle?: string;
+  description?: string;
+  mention?: PromptMention;
+  skill?: PromptSkill;
 };
 
 const initialParams = new URLSearchParams(window.location.search);
@@ -160,6 +182,44 @@ function sameHistory(left: ChatEntry[], right: ChatEntry[]) {
     const next = right[index];
     return entry.role === next.role && entry.text === next.text;
   });
+}
+
+function appSlug(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function detectComposerTrigger(value: string, caret: number): ComposerAutocomplete | null {
+  const before = value.slice(0, caret);
+  const match = before.match(/(?:^|\s)([$@])([^\s$@]*)$/);
+  if (!match || match.index === undefined) return null;
+  const token = match[0];
+  const trigger = match[1] as ComposerTrigger;
+  const query = match[2] || "";
+  const start = match.index + token.lastIndexOf(trigger);
+  return { trigger, start, end: caret, query };
+}
+
+function composerCandidateScore(candidate: ComposerCandidate, query: string) {
+  const normalized = query.trim().toLowerCase();
+  const label = candidate.label.toLowerCase();
+  const value = candidate.value.toLowerCase();
+  const cleanValue = value.replace(/^[$@]/, "");
+  const subtitle = candidate.subtitle?.toLowerCase() || "";
+  const description = candidate.description?.toLowerCase() || "";
+  const kindBias = candidate.kind === "app" ? -1 : candidate.kind === "file" ? -0.5 : 0;
+  if (!normalized) return kindBias;
+  if (label === normalized || cleanValue === normalized) return kindBias;
+  if (label.startsWith(normalized)) return 10 + kindBias;
+  if (cleanValue.startsWith(normalized)) return 12 + kindBias;
+  if (label.includes(normalized)) return 20 + kindBias;
+  if (cleanValue.includes(normalized)) return 22 + kindBias;
+  if (subtitle.includes(normalized)) return 40 + kindBias;
+  if (normalized.length >= 3 && description.includes(normalized)) return 80 + kindBias;
+  return null;
 }
 
 function authHeaders(token: string) {
@@ -505,14 +565,20 @@ function App() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [capabilities, setCapabilities] = useState<CapabilitySummary | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState(initialThread);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
   const [mentions, setMentions] = useState<PromptMention[]>([]);
+  const [promptSkills, setPromptSkills] = useState<PromptSkill[]>([]);
   const [fileQuery, setFileQuery] = useState("");
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
+  const [inlineFileMatches, setInlineFileMatches] = useState<FileSearchResult[]>([]);
+  const [inlineFileLoading, setInlineFileLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [composerAutocomplete, setComposerAutocomplete] = useState<ComposerAutocomplete | null>(null);
+  const [composerActiveIndex, setComposerActiveIndex] = useState(0);
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Set<string>>(() => new Set());
@@ -577,6 +643,55 @@ function App() {
     ];
   }, [models, selectedEffort, selectedModel]);
 
+  const composerCandidates = useMemo<ComposerCandidate[]>(() => {
+    if (!composerAutocomplete) return [];
+    const apps =
+      capabilities?.apps
+        .filter((app) => app.enabled !== false)
+        .map((app) => {
+          const slug = appSlug(app.title || app.id);
+          return {
+            id: `app:${app.id}`,
+            kind: "app" as const,
+            label: app.title,
+            value: `$${slug || app.id}`,
+            subtitle: "App",
+            description: app.description,
+            mention: { id: `app:${app.id}`, name: app.title, path: `app://${app.id}`, kind: "app" as const },
+          };
+        }) || [];
+
+    const skills =
+      capabilities?.skills
+        .filter((skill) => skill.enabled !== false)
+        .map((skill) => ({
+          id: `skill:${skill.id}`,
+          kind: "skill" as const,
+          label: skill.title,
+          value: `$${skill.title}`,
+          subtitle: "Skill",
+          description: skill.description,
+          skill: { id: skill.id, name: skill.title, path: skill.id },
+        })) || [];
+
+    const files = inlineFileMatches.map((file) => ({
+      id: `file:${file.root}:${file.path}`,
+      kind: "file" as const,
+      label: file.fileName || file.path,
+      value: `@${file.path}`,
+      subtitle: file.path,
+      mention: { id: `${file.root}:${file.path}`, name: file.fileName || file.path, path: file.path, kind: "file" as const },
+    }));
+
+    const pool: ComposerCandidate[] = composerAutocomplete.trigger === "$" ? [...skills, ...apps] : [...files, ...apps];
+    return pool
+      .map((candidate) => ({ candidate, score: composerCandidateScore(candidate, composerAutocomplete.query) }))
+      .filter((entry): entry is { candidate: ComposerCandidate; score: number } => entry.score !== null)
+      .sort((left, right) => left.score - right.score || left.candidate.label.localeCompare(right.candidate.label))
+      .map((entry) => entry.candidate)
+      .slice(0, 10);
+  }, [capabilities, composerAutocomplete, inlineFileMatches]);
+
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
   }, [selectedThreadId]);
@@ -584,6 +699,10 @@ function App() {
   useEffect(() => {
     runStateRef.current = runState;
   }, [runState]);
+
+  useEffect(() => {
+    setComposerActiveIndex((current) => Math.min(current, Math.max(composerCandidates.length - 1, 0)));
+  }, [composerCandidates.length]);
 
   const updateThreadUrl = useCallback((threadId: string) => {
     const next = new URL(window.location.href);
@@ -646,6 +765,16 @@ function App() {
       setModels(next);
     } catch {
       setModels([]);
+    }
+  }, [token]);
+
+  const loadCapabilities = useCallback(async () => {
+    if (!token) return;
+    try {
+      const result = await apiGet<CapabilitySummary>("/api/capabilities", token);
+      setCapabilities(result);
+    } catch {
+      setCapabilities(null);
     }
   }, [token]);
 
@@ -790,9 +919,10 @@ function App() {
     if (!token) return;
     void loadThreads();
     void loadModels();
+    void loadCapabilities();
     connect(initialThread);
     return () => wsRef.current?.close();
-  }, [connect, loadModels, loadThreads, token]);
+  }, [connect, loadCapabilities, loadModels, loadThreads, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -867,6 +997,38 @@ function App() {
     };
   }, [fileQuery, token]);
 
+  useEffect(() => {
+    if (!token || composerAutocomplete?.trigger !== "@") {
+      setInlineFileMatches([]);
+      setInlineFileLoading(false);
+      return;
+    }
+    const query = composerAutocomplete.query.trim();
+    if (query.length < 2) {
+      setInlineFileMatches([]);
+      setInlineFileLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setInlineFileLoading(true);
+    const timer = window.setTimeout(() => {
+      void apiGet<{ data: FileSearchResult[] }>(`/api/files/search?q=${encodeURIComponent(query)}`, token)
+        .then((result) => {
+          if (!cancelled) setInlineFileMatches(result.data);
+        })
+        .catch(() => {
+          if (!cancelled) setInlineFileMatches([]);
+        })
+        .finally(() => {
+          if (!cancelled) setInlineFileLoading(false);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [composerAutocomplete, token]);
+
   useLayoutEffect(() => {
     const log = logRef.current;
     if (!log) return;
@@ -899,6 +1061,62 @@ function App() {
     connect(threadId);
   };
 
+  const updateComposerAutocomplete = (value: string, caret: number | null) => {
+    if (caret === null) {
+      setComposerAutocomplete(null);
+      return;
+    }
+    const next = detectComposerTrigger(value, caret);
+    setComposerAutocomplete(next);
+    setComposerActiveIndex(0);
+  };
+
+  const focusPromptAt = (position: number) => {
+    window.requestAnimationFrame(() => {
+      const textarea = promptRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(position, position);
+      updateComposerAutocomplete(textarea.value, position);
+    });
+  };
+
+  const addMentionItem = (mention: PromptMention) => {
+    setMentions((current) => (current.some((item) => item.id === mention.id || item.path === mention.path) ? current : [...current, mention].slice(0, 12)));
+  };
+
+  const addPromptSkill = (skill: PromptSkill) => {
+    setPromptSkills((current) => (current.some((item) => item.path === skill.path) ? current : [...current, skill].slice(0, 8)));
+  };
+
+  const applyComposerCandidate = (candidate: ComposerCandidate) => {
+    if (!composerAutocomplete) return;
+    const trailing = prompt[composerAutocomplete.end] && /\s/.test(prompt[composerAutocomplete.end]) ? "" : " ";
+    const replacement = `${candidate.value}${trailing}`;
+    const nextPrompt = `${prompt.slice(0, composerAutocomplete.start)}${replacement}${prompt.slice(composerAutocomplete.end)}`;
+    const nextCaret = composerAutocomplete.start + replacement.length;
+    setPrompt(nextPrompt);
+    if (candidate.mention) addMentionItem(candidate.mention);
+    if (candidate.skill) addPromptSkill(candidate.skill);
+    setComposerAutocomplete(null);
+    setComposerActiveIndex(0);
+    focusPromptAt(nextCaret);
+  };
+
+  const openComposerTrigger = (trigger: ComposerTrigger) => {
+    const textarea = promptRef.current;
+    const start = textarea?.selectionStart ?? prompt.length;
+    const end = textarea?.selectionEnd ?? prompt.length;
+    const prefix = start > 0 && !/\s/.test(prompt[start - 1]) ? " " : "";
+    const replacement = `${prefix}${trigger}`;
+    const nextPrompt = `${prompt.slice(0, start)}${replacement}${prompt.slice(end)}`;
+    const nextCaret = start + replacement.length;
+    setPrompt(nextPrompt);
+    setComposerAutocomplete({ trigger, start: nextCaret - 1, end: nextCaret, query: "" });
+    setComposerActiveIndex(0);
+    focusPromptAt(nextCaret);
+  };
+
   const addAttachments = async (files: FileList | null, input: HTMLInputElement) => {
     input.value = "";
     if (!files || files.length === 0) return;
@@ -918,12 +1136,12 @@ function App() {
   };
 
   const addMention = (file: FileSearchResult) => {
-    const mention: PromptMention = {
+    addMentionItem({
       id: `${file.root}:${file.path}`,
       name: file.fileName || file.path,
       path: file.path,
-    };
-    setMentions((current) => (current.some((item) => item.path === mention.path) ? current : [...current, mention].slice(0, 12)));
+      kind: "file",
+    });
     setFileQuery("");
     setFileMatches([]);
   };
@@ -931,12 +1149,13 @@ function App() {
   const sendPrompt = () => {
     const text = prompt.trim();
     const ws = wsRef.current;
-    if ((!text && attachments.length === 0 && mentions.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if ((!text && attachments.length === 0 && mentions.length === 0 && promptSkills.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
     const message: BridgeClientMessage = {
       type: "prompt",
       text,
       attachments,
       mentions,
+      skills: promptSkills,
       options: {
         accessMode,
         model: selectedModel || undefined,
@@ -947,6 +1166,8 @@ function App() {
     setPrompt("");
     setAttachments([]);
     setMentions([]);
+    setPromptSkills([]);
+    setComposerAutocomplete(null);
   };
 
   const decideApproval = (decision: ApprovalDecision) => {
@@ -1247,12 +1468,25 @@ function App() {
               )}
             </div>
 
-            {mentions.length > 0 && (
-              <div className="mention-strip" aria-label="参照ファイル">
+            {(promptSkills.length > 0 || mentions.length > 0) && (
+              <div className="mention-strip" aria-label="呼び出しと参照">
+                {promptSkills.map((skill) => (
+                  <div className="mention-chip skill-chip" key={skill.id}>
+                    <span className="mention-kind">$</span>
+                    <span>{skill.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`${skill.name} を削除`}
+                      onClick={() => setPromptSkills((current) => current.filter((item) => item.id !== skill.id))}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
                 {mentions.map((mention) => (
-                  <div className="mention-chip" key={mention.id}>
-                    <FileSearch size={14} />
-                    <span>{mention.path}</span>
+                  <div className={`mention-chip ${mention.kind === "app" ? "app-chip" : ""}`} key={mention.id}>
+                    <span className="mention-kind">{mention.kind === "app" ? "$" : "@"}</span>
+                    <span>{mention.kind === "app" ? mention.name : mention.path}</span>
                     <button
                       type="button"
                       aria-label={`${mention.name} を削除`}
@@ -1286,19 +1520,81 @@ function App() {
             <textarea
               ref={promptRef}
               value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => {
+                const textarea = event.currentTarget;
+                setPrompt(textarea.value);
+                updateComposerAutocomplete(textarea.value, textarea.selectionStart);
+              }}
               onKeyDown={(event) => {
+                if (composerAutocomplete && !event.nativeEvent.isComposing) {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setComposerAutocomplete(null);
+                    return;
+                  }
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setComposerActiveIndex((current) => Math.min(current + 1, Math.max(composerCandidates.length - 1, 0)));
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setComposerActiveIndex((current) => Math.max(current - 1, 0));
+                    return;
+                  }
+                  if ((event.key === "Enter" || event.key === "Tab") && composerCandidates[composerActiveIndex]) {
+                    event.preventDefault();
+                    applyComposerCandidate(composerCandidates[composerActiveIndex]);
+                    return;
+                  }
+                }
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
                   sendPrompt();
                 }
               }}
+              onKeyUp={(event) => {
+                if (["Escape", "ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)) return;
+                updateComposerAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart);
+              }}
+              onClick={(event) => updateComposerAutocomplete(event.currentTarget.value, event.currentTarget.selectionStart)}
               placeholder="フォローアップの変更を求める"
               rows={1}
             />
 
+            {composerAutocomplete && (composerCandidates.length > 0 || inlineFileLoading) && (
+              <div className="composer-suggestions" role="listbox">
+                {inlineFileLoading && composerCandidates.length === 0 && <div className="composer-suggestion-empty">検索中</div>}
+                {composerCandidates.map((candidate, index) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={index === composerActiveIndex}
+                    className={index === composerActiveIndex ? "active" : ""}
+                    key={candidate.id}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      applyComposerCandidate(candidate);
+                    }}
+                  >
+                    <span className={`suggestion-kind ${candidate.kind}`}>{candidate.kind === "file" ? "@" : "$"}</span>
+                    <span className="suggestion-main">
+                      <b>{candidate.label}</b>
+                      <small>{candidate.subtitle || candidate.value}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="composer-toolbar">
               <div className="composer-toolbar-left">
+                <button className="composer-trigger-button" type="button" onClick={() => openComposerTrigger("$")} aria-label="スキルやアプリを呼び出す">
+                  $
+                </button>
+                <button className="composer-trigger-button" type="button" onClick={() => openComposerTrigger("@")} aria-label="ファイルやアプリを参照する">
+                  @
+                </button>
                 <label
                   className={`attach-button ${!selectedModelSupportsImage ? "disabled" : ""}`}
                   title={selectedModelSupportsImage ? "画像を添付" : "この model は画像入力に未対応です"}
@@ -1346,7 +1642,7 @@ function App() {
                   className="send-button"
                   type="button"
                   onClick={sendPrompt}
-                  disabled={(!prompt.trim() && attachments.length === 0 && mentions.length === 0) || runState === "connecting"}
+                  disabled={(!prompt.trim() && attachments.length === 0 && mentions.length === 0 && promptSkills.length === 0) || runState === "connecting"}
                 >
                   <Send size={18} />
                 </button>

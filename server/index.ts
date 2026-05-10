@@ -22,6 +22,7 @@ import {
   type FileSearchResult,
   type PromptAttachment,
   type PromptMention,
+  type PromptSkill,
   type ReasoningEffort,
   type ThreadSummary,
 } from "../shared/protocol.js";
@@ -153,6 +154,13 @@ function promptMentions(mentions: PromptMention[] = []): Array<{ type: "mention"
     .filter((mention) => mention.path && mention.name)
     .slice(0, 12)
     .map((mention) => ({ type: "mention", name: mention.name, path: mention.path }));
+}
+
+function promptSkills(skills: PromptSkill[] = []): Array<{ type: "skill"; name: string; path: string }> {
+  return skills
+    .filter((skill) => skill.path && skill.name)
+    .slice(0, 8)
+    .map((skill) => ({ type: "skill", name: skill.name, path: skill.path }));
 }
 
 function createUpstreamWebSocket() {
@@ -825,7 +833,7 @@ class SharedBridge {
 
   private prompt(text: string, options: BridgeClientMessage & { type: "prompt" }) {
     const cleanText = text.trim();
-    if (!cleanText && !options.attachments?.length && !options.mentions?.length) return;
+    if (!cleanText && !options.attachments?.length && !options.mentions?.length && !options.skills?.length) return;
     if (!this.ready || !this.threadId) {
       this.emit({ type: "error", entry: newEntry("error", "Thread の準備がまだ完了していません。") });
       return;
@@ -857,15 +865,18 @@ class SharedBridge {
     }
 
     const attachmentText = imageInputs.length ? `\n\n添付画像: ${imageInputs.length}件` : "";
+    const skillInputs = promptSkills(message.skills || []);
+    const skillText = skillInputs.length ? `\n\nスキル: ${skillInputs.map((skill) => skill.name).join(", ")}` : "";
     const mentionInputs = promptMentions(message.mentions || []);
-    const mentionText = mentionInputs.length ? `\n\n参照ファイル: ${mentionInputs.map((mention) => mention.path).join(", ")}` : "";
-    const userEntry = newEntry("user", `${text || "添付/参照を確認してください。"}${attachmentText}${mentionText}`);
+    const mentionText = mentionInputs.length ? `\n\n参照: ${mentionInputs.map((mention) => mention.path).join(", ")}` : "";
+    const userEntry = newEntry("user", `${text || "添付/参照を確認してください。"}${skillText}${attachmentText}${mentionText}`);
     this.history.push(userEntry);
     this.emit({ type: "user", entry: userEntry });
 
     const access = accessParams(message.options.accessMode);
     const input = [
       ...(text ? [{ type: "text", text, text_elements: [] }] : []),
+      ...skillInputs,
       ...mentionInputs,
       ...imageInputs,
     ];
