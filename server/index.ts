@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -17,6 +17,7 @@ import {
   type BridgeClientMessage,
   type BridgeServerMessage,
   type ChatEntry,
+  type PromptAttachment,
   type ReasoningEffort,
   type ThreadSummary,
 } from "../shared/protocol.js";
@@ -44,6 +45,7 @@ const managedCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath
 const workdir = process.env.CODEX_WORKDIR || projectRoot;
 const defaultModel = process.env.CODEX_MODEL || "gpt-5.4";
 const tokenPath = path.join(projectRoot, ".codex-remote-token");
+const uploadRoot = path.join(projectRoot, ".uploads");
 const bridges = new Map<string, SharedBridge>();
 
 const mimeTypes = new Map([
@@ -103,6 +105,41 @@ function parseRpcMessage(data: RawData): RpcMessage | null {
   } catch {
     return null;
   }
+}
+
+function imageExtension(mediaType: string, name: string) {
+  const normalized = mediaType.toLowerCase();
+  if (normalized === "image/png") return ".png";
+  if (normalized === "image/jpeg" || normalized === "image/jpg") return ".jpg";
+  if (normalized === "image/webp") return ".webp";
+  if (normalized === "image/gif") return ".gif";
+  const ext = path.extname(name).toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) return ext === ".jpeg" ? ".jpg" : ext;
+  return "";
+}
+
+function decodeDataUrl(dataUrl: string) {
+  const match = dataUrl.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/);
+  if (!match) throw new Error("画像添付の形式が不正です。");
+  return {
+    mediaType: match[1],
+    data: Buffer.from(match[2].replace(/\s/g, ""), "base64"),
+  };
+}
+
+function savePromptAttachments(attachments: PromptAttachment[] = []): Array<{ type: "localImage"; path: string }> {
+  if (attachments.length > 6) throw new Error("画像添付は一度に 6 件までです。");
+  mkdirSync(uploadRoot, { recursive: true, mode: 0o700 });
+  return attachments.map((attachment) => {
+    const decoded = decodeDataUrl(attachment.dataUrl);
+    const mediaType = attachment.mediaType || decoded.mediaType;
+    const ext = imageExtension(mediaType, attachment.name);
+    if (!ext) throw new Error(`${attachment.name || "画像"} は未対応の画像形式です。`);
+    if (decoded.data.byteLength > 8 * 1024 * 1024) throw new Error(`${attachment.name || "画像"} が 8MB を超えています。`);
+    const filePath = path.join(uploadRoot, `${Date.now()}-${randomBytes(8).toString("hex")}${ext}`);
+    writeFileSync(filePath, decoded.data, { mode: 0o600 });
+    return { type: "localImage", path: filePath };
+  });
 }
 
 function createUpstreamWebSocket() {
@@ -544,7 +581,7 @@ class SharedBridge {
 
   private prompt(text: string, options: BridgeClientMessage & { type: "prompt" }) {
     const cleanText = text.trim();
-    if (!cleanText) return;
+    if (!cleanText && !options.attachments?.length) return;
     if (!this.ready || !this.threadId) {
       this.emit({ type: "error", entry: newEntry("error", "Thread の準備がまだ完了していません。") });
       return;
@@ -566,14 +603,28 @@ class SharedBridge {
   }
 
   private startPrompt(text: string, message: BridgeClientMessage & { type: "prompt" }) {
-    const userEntry = newEntry("user", text);
+    let imageInputs: Array<{ type: "localImage"; path: string }>;
+    try {
+      imageInputs = savePromptAttachments(message.attachments || []);
+    } catch (error) {
+      this.emit({ type: "error", entry: newEntry("error", toError(error).message) });
+      this.startNextQueuedTurn();
+      return;
+    }
+
+    const attachmentText = imageInputs.length ? `\n\n添付画像: ${imageInputs.length}件` : "";
+    const userEntry = newEntry("user", `${text || "画像を確認してください。"}${attachmentText}`);
     this.history.push(userEntry);
     this.emit({ type: "user", entry: userEntry });
 
     const access = accessParams(message.options.accessMode);
+    const input = [
+      ...(text ? [{ type: "text", text, text_elements: [] }] : []),
+      ...imageInputs,
+    ];
     const params = {
       threadId: this.threadId,
-      input: [{ type: "text", text, text_elements: [] }],
+      input,
       ...(message.options.model ? { model: message.options.model } : {}),
       ...(isReasoningEffort(message.options.effort) ? { effort: message.options.effort } : {}),
       approvalPolicy: access.approvalPolicy,

@@ -698,9 +698,60 @@
   color: #075985;
 }
 
+.attachment-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.attachment-chip {
+  display: grid;
+  grid-template-columns: 34px minmax(84px, 160px) 28px;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 5px 4px 4px;
+  background: var(--surface);
+}
+
+.attachment-chip img {
+  width: 34px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.attachment-chip span {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-strong);
+}
+
+.attachment-chip button:hover {
+  background: var(--hover);
+  color: #991b1b;
+}
+
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
   gap: 10px;
   align-items: end;
   border: 1px solid var(--composer-line);
@@ -722,13 +773,43 @@
   outline: 0;
 }
 
+.attach-button,
 .send-button {
   display: grid;
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 0;
   border-radius: 8px;
+}
+
+.attach-button {
+  position: relative;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: var(--muted-strong);
+}
+
+.attach-button:hover {
+  background: var(--hover);
+  color: var(--text-strong);
+}
+
+.attach-button.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.attach-button input {
+  position: absolute;
+  inset: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.send-button {
+  border: 0;
   background: #1f2937;
   color: #fff;
 }
@@ -881,6 +962,12 @@
   }
 
   .composer {
-    grid-template-columns: minmax(0, 1fr) 40px;
+    grid-template-columns: minmax(0, 1fr) 40px 40px;
+  }
+
+  .attach-button,
+  .send-button {
+    width: 40px;
+    height: 40px;
   }
 }

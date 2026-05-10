@@ -47,10 +47,18 @@ export type PromptOptions = {
   accessMode: AccessModeId;
 };
 
+export type PromptAttachment = {
+  id: string;
+  name: string;
+  mediaType: string;
+  dataUrl: string;
+};
+
 export type BridgeClientMessage =
   | {
       type: "prompt";
       text: string;
+      attachments?: PromptAttachment[];
       options: PromptOptions;
     }
   | {

@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
+  ImagePlus,
   Menu,
   PanelLeft,
   Plus,
   RefreshCcw,
   Send,
   Shield,
+  Trash2,
   X,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -19,6 +21,7 @@ import type {
   BridgeClientMessage,
   BridgeServerMessage,
   ChatEntry,
+  PromptAttachment,
   ReasoningEffort,
   RunState,
   ServerInfo,
@@ -75,6 +78,8 @@ const reasoningLabels: Record<ReasoningEffort, string> = {
   high: "高",
   xhigh: "最高",
 };
+const maxImageAttachments = 6;
+const maxImageBytes = 8 * 1024 * 1024;
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return reasoningEfforts.includes(value as ReasoningEffort);
@@ -184,6 +189,26 @@ function compactJson(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("画像を読み込めませんでした。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function fileToAttachment(file: File): Promise<PromptAttachment> {
+  if (!file.type.startsWith("image/")) throw new Error(`${file.name} は画像ではありません。`);
+  if (file.size > maxImageBytes) throw new Error(`${file.name} が 8MB を超えています。`);
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name,
+    mediaType: file.type || "application/octet-stream",
+    dataUrl: await readFileAsDataUrl(file),
+  };
 }
 
 function approvalHasDecision(params: Record<string, unknown>, decision: ApprovalDecision) {
@@ -402,6 +427,7 @@ function App() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState(initialThread);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
+  const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
   const [prompt, setPrompt] = useState("");
   const [search, setSearch] = useState("");
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
@@ -434,6 +460,8 @@ function App() {
     () => selectedModelOption?.supportedReasoningEfforts || fallbackReasoningOptions,
     [selectedModelOption],
   );
+  const selectedModelSupportsImage =
+    !selectedModelOption || selectedModelOption.inputModalities.length === 0 || selectedModelOption.inputModalities.includes("image");
   const approvalInfo = useMemo(() => (pendingApproval === null ? null : describeApproval(pendingApproval)), [pendingApproval]);
   const modelOptions = useMemo(() => {
     if (!selectedModel || models.some((model) => model.id === selectedModel)) return models;
@@ -652,13 +680,32 @@ function App() {
     connect(threadId);
   };
 
+  const addAttachments = async (files: FileList | null, input: HTMLInputElement) => {
+    input.value = "";
+    if (!files || files.length === 0) return;
+    if (!selectedModelSupportsImage) {
+      setLastError("選択中の model は画像入力に対応していません。");
+      return;
+    }
+    try {
+      const remaining = maxImageAttachments - attachments.length;
+      if (remaining <= 0) throw new Error(`画像添付は一度に ${maxImageAttachments} 件までです。`);
+      const next = await Promise.all(Array.from(files).slice(0, remaining).map(fileToAttachment));
+      setAttachments((current) => [...current, ...next].slice(0, maxImageAttachments));
+      setLastError("");
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const sendPrompt = () => {
     const text = prompt.trim();
     const ws = wsRef.current;
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if ((!text && attachments.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
     const message: BridgeClientMessage = {
       type: "prompt",
       text,
+      attachments,
       options: {
         accessMode,
         model: selectedModel || undefined,
@@ -667,6 +714,7 @@ function App() {
     };
     ws.send(JSON.stringify(message));
     setPrompt("");
+    setAttachments([]);
   };
 
   const decideApproval = (decision: ApprovalDecision) => {
@@ -844,6 +892,24 @@ function App() {
             </div>
           </div>
 
+          {attachments.length > 0 && (
+            <div className="attachment-strip" aria-label="添付画像">
+              {attachments.map((attachment) => (
+                <div className="attachment-chip" key={attachment.id}>
+                  <img src={attachment.dataUrl} alt="" />
+                  <span>{attachment.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`${attachment.name} を削除`}
+                    onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="composer">
             <textarea
               value={prompt}
@@ -857,7 +923,20 @@ function App() {
               placeholder="Codex に送る"
               rows={3}
             />
-            <button className="send-button" type="button" onClick={sendPrompt} disabled={!prompt.trim() || runState === "connecting"}>
+            <label
+              className={`attach-button ${!selectedModelSupportsImage ? "disabled" : ""}`}
+              title={selectedModelSupportsImage ? "画像を添付" : "この model は画像入力に未対応です"}
+            >
+              <ImagePlus size={18} />
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                disabled={!selectedModelSupportsImage}
+                onChange={(event) => void addAttachments(event.currentTarget.files, event.currentTarget)}
+              />
+            </label>
+            <button className="send-button" type="button" onClick={sendPrompt} disabled={(!prompt.trim() && attachments.length === 0) || runState === "connecting"}>
               <Send size={18} />
             </button>
           </div>
