@@ -79,6 +79,12 @@
   color: var(--text-strong);
 }
 
+.icon-button.danger:hover {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
 .sidebar-close,
 .mobile-menu {
   display: none;

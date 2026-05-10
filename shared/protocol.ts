@@ -65,6 +65,9 @@ export type BridgeClientMessage =
       type: "approval";
       decision: ApprovalDecision;
       request: unknown;
+    }
+  | {
+      type: "interrupt";
     };
 
 export type BridgeServerMessage =

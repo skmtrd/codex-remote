@@ -9,6 +9,7 @@ import {
   RefreshCcw,
   Send,
   Shield,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -463,6 +464,7 @@ function App() {
   const selectedModelSupportsImage =
     !selectedModelOption || selectedModelOption.inputModalities.length === 0 || selectedModelOption.inputModalities.includes("image");
   const approvalInfo = useMemo(() => (pendingApproval === null ? null : describeApproval(pendingApproval)), [pendingApproval]);
+  const canInterrupt = runState === "running" || runState === "streaming" || runState === "approval";
   const modelOptions = useMemo(() => {
     if (!selectedModel || models.some((model) => model.id === selectedModel)) return models;
     return [
@@ -726,6 +728,13 @@ function App() {
     setRunState("running");
   };
 
+  const interruptTurn = () => {
+    const ws = wsRef.current;
+    if (!canInterrupt || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const message: BridgeClientMessage = { type: "interrupt" };
+    ws.send(JSON.stringify(message));
+  };
+
   return (
     <main className="app-shell">
       <button
@@ -797,6 +806,11 @@ function App() {
               <span className="run-dot" />
               {runStateLabel[runState]}
             </span>
+            {canInterrupt && (
+              <button className="icon-button danger" type="button" onClick={interruptTurn} aria-label="停止">
+                <Square size={15} />
+              </button>
+            )}
             <button className="icon-button" type="button" onClick={() => connect(selectedThreadId)} aria-label="再接続">
               <RefreshCcw size={17} />
             </button>

@@ -426,6 +426,7 @@ class SharedBridge {
 
     if (msg.type === "prompt") this.prompt(msg.text, msg);
     if (msg.type === "approval") this.approval(msg.request, msg.decision);
+    if (msg.type === "interrupt") this.interrupt();
   }
 
   private readyPayload(): BridgeServerMessage {
@@ -524,6 +525,20 @@ class SharedBridge {
         const turn = (msg.result?.turn || {}) as Record<string, unknown>;
         this.activeTurnId = String(turn.id || "");
         this.emit({ type: "turn", status: "started", turnId: this.activeTurnId });
+        return;
+      }
+
+      if (pendingMethod === "turn/interrupt") {
+        this.pending.delete(msg.id || -1);
+        if (msg.error) {
+          if ((msg.error.message || "").toLowerCase().includes("no active turn")) {
+            this.emit({ type: "status", entry: newEntry("status", "停止対象の turn は既に終了していました。") });
+            return;
+          }
+          this.emit({ type: "error", entry: newEntry("error", msg.error.message || "turn の停止に失敗しました。") });
+          return;
+        }
+        this.emit({ type: "status", entry: newEntry("status", "停止要求を送信しました。") });
         return;
       }
 
@@ -648,6 +663,18 @@ class SharedBridge {
       type: "status",
       entry: newEntry("status", approvalStatusText(normalizedDecision)),
     });
+  }
+
+  private interrupt() {
+    if (!this.ready || !this.threadId || !this.activeTurnId) {
+      this.emit({ type: "status", entry: newEntry("status", "停止できる実行中 turn はありません。") });
+      return;
+    }
+    this.request("turn/interrupt", {
+      threadId: this.threadId,
+      turnId: this.activeTurnId,
+    });
+    this.emit({ type: "status", entry: newEntry("status", "停止を要求しています。") });
   }
 }
 
