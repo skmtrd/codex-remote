@@ -9,10 +9,12 @@ Local-first browser remote control for Codex.
 - React + Vite + TypeScript browser UI
 - Node/Hono bridge server
 - WebSocket bridge to Codex `app-server`
-- thread list, new thread, and thread resume
-- prompt sending with streaming assistant output
-- approval accept/decline flow
-- model selector and access-mode selector
+- thread list, new thread, thread resume, rename, archive, compact, fork, and rollback
+- prompt sending with streaming assistant output, reasoning summary, plan updates, and diff updates
+- approval accept/decline/session flow with command and file-change summaries
+- model selector, reasoning effort selector, and access-mode selector
+- image attachments and file mentions backed by Codex `localImage` / `mention` inputs
+- Skills, plugins, apps, and MCP server inventory in the left sidebar
 - responsive left-sidebar layout for desktop, iPad, and mobile
 
 ## Quick start

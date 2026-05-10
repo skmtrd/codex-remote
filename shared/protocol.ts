@@ -35,6 +35,30 @@ export type ServerInfo = {
   tokenRequired: boolean;
 };
 
+export type CapabilityItem = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  meta: string[];
+  enabled?: boolean;
+};
+
+export type CapabilitySummary = {
+  skills: CapabilityItem[];
+  plugins: CapabilityItem[];
+  apps: CapabilityItem[];
+  mcpServers: CapabilityItem[];
+  errors: string[];
+};
+
+export type FileSearchResult = {
+  root: string;
+  path: string;
+  fileName: string;
+  score?: number;
+};
+
 export type AccessModeId = "full" | "review" | "read-only";
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -54,11 +78,18 @@ export type PromptAttachment = {
   dataUrl: string;
 };
 
+export type PromptMention = {
+  id: string;
+  name: string;
+  path: string;
+};
+
 export type BridgeClientMessage =
   | {
       type: "prompt";
       text: string;
       attachments?: PromptAttachment[];
+      mentions?: PromptMention[];
       options: PromptOptions;
     }
   | {

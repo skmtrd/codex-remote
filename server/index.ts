@@ -16,8 +16,12 @@ import {
   type ApprovalDecision,
   type BridgeClientMessage,
   type BridgeServerMessage,
+  type CapabilityItem,
+  type CapabilitySummary,
   type ChatEntry,
+  type FileSearchResult,
   type PromptAttachment,
+  type PromptMention,
   type ReasoningEffort,
   type ThreadSummary,
 } from "../shared/protocol.js";
@@ -140,6 +144,13 @@ function savePromptAttachments(attachments: PromptAttachment[] = []): Array<{ ty
     writeFileSync(filePath, decoded.data, { mode: 0o600 });
     return { type: "localImage", path: filePath };
   });
+}
+
+function promptMentions(mentions: PromptMention[] = []): Array<{ type: "mention"; name: string; path: string }> {
+  return mentions
+    .filter((mention) => mention.path && mention.name)
+    .slice(0, 12)
+    .map((mention) => ({ type: "mention", name: mention.name, path: mention.path }));
 }
 
 function createUpstreamWebSocket() {
@@ -373,6 +384,134 @@ function normalizeThreads(result: Record<string, unknown>): ThreadSummary[] {
     .filter((thread) => thread.id);
 }
 
+function objectValue(value: unknown) {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function boolValue(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizeSkillCapabilities(result: Record<string, unknown>): CapabilityItem[] {
+  const entries = Array.isArray(result.data) ? result.data : [];
+  return entries.flatMap((entry) => {
+    const cwd = stringValue(objectValue(entry).cwd);
+    const skills = Array.isArray(objectValue(entry).skills) ? (objectValue(entry).skills as unknown[]) : [];
+    return skills
+      .filter((skill): skill is Record<string, unknown> => Boolean(skill && typeof skill === "object"))
+      .map((skill) => {
+        const name = stringValue(skill.name) || stringValue(skill.path) || "skill";
+        const description = stringValue(skill.shortDescription) || stringValue(skill.description);
+        const scope = stringValue(skill.scope);
+        return {
+          id: stringValue(skill.path) || `${cwd}:${name}`,
+          title: name,
+          subtitle: scope || cwd,
+          description,
+          meta: [cwd && projectRoot === cwd ? "current cwd" : cwd, scope, boolValue(skill.enabled) === false ? "disabled" : "enabled"].filter(Boolean),
+          enabled: boolValue(skill.enabled),
+        };
+      });
+  });
+}
+
+function normalizePluginCapabilities(result: Record<string, unknown>): CapabilityItem[] {
+  const marketplaces = Array.isArray(result.marketplaces) ? result.marketplaces : [];
+  return marketplaces.flatMap((marketplace) => {
+    const record = objectValue(marketplace);
+    const marketName = stringValue(record.name) || stringValue(objectValue(record.interface).displayName) || "marketplace";
+    const plugins = Array.isArray(record.plugins) ? record.plugins : [];
+    return plugins
+      .filter((plugin): plugin is Record<string, unknown> => Boolean(plugin && typeof plugin === "object"))
+      .map((plugin) => ({
+        id: stringValue(plugin.id) || `${marketName}:${stringValue(plugin.name)}`,
+        title: stringValue(plugin.name) || stringValue(plugin.id) || "plugin",
+        subtitle: marketName,
+        description: stringValue(objectValue(plugin.interface).description),
+        meta: [
+          boolValue(plugin.installed) ? "installed" : "not installed",
+          boolValue(plugin.enabled) ? "enabled" : "disabled",
+          stringValue(plugin.installPolicy),
+          stringValue(plugin.authPolicy),
+        ].filter(Boolean),
+        enabled: boolValue(plugin.enabled),
+      }));
+  });
+}
+
+function normalizeAppCapabilities(result: Record<string, unknown>): CapabilityItem[] {
+  const apps = Array.isArray(result.data) ? result.data : [];
+  return apps
+    .filter((app): app is Record<string, unknown> => Boolean(app && typeof app === "object"))
+    .map((app) => ({
+      id: stringValue(app.id) || stringValue(app.name),
+      title: stringValue(app.name) || stringValue(app.id) || "app",
+      subtitle: stringValue(app.distributionChannel),
+      description: stringValue(app.description),
+      meta: [
+        boolValue(app.isAccessible) ? "accessible" : "not accessible",
+        boolValue(app.isEnabled) ? "enabled" : "disabled",
+        ...(Array.isArray(app.pluginDisplayNames) ? app.pluginDisplayNames.map(String).slice(0, 2) : []),
+      ].filter(Boolean),
+      enabled: boolValue(app.isEnabled),
+    }));
+}
+
+function normalizeMcpCapabilities(result: Record<string, unknown>): CapabilityItem[] {
+  const servers = Array.isArray(result.data) ? result.data : [];
+  return servers
+    .filter((server): server is Record<string, unknown> => Boolean(server && typeof server === "object"))
+    .map((server) => {
+      const tools = objectValue(server.tools);
+      const resources = Array.isArray(server.resources) ? server.resources : [];
+      const templates = Array.isArray(server.resourceTemplates) ? server.resourceTemplates : [];
+      const toolNames = Object.keys(tools);
+      return {
+        id: stringValue(server.name) || "mcp",
+        title: stringValue(server.name) || "MCP server",
+        subtitle: stringValue(server.authStatus),
+        description: toolNames.slice(0, 4).join(", "),
+        meta: [`${toolNames.length} tools`, `${resources.length} resources`, `${templates.length} templates`, stringValue(server.authStatus)].filter(Boolean),
+        enabled: true,
+      };
+    });
+}
+
+function normalizeCapabilities(results: Array<PromiseSettledResult<Record<string, unknown>>>): CapabilitySummary {
+  const errors: string[] = [];
+  const value = (index: number, label: string) => {
+    const result = results[index];
+    if (result.status === "fulfilled") return result.value;
+    errors.push(`${label}: ${toError(result.reason).message}`);
+    return {};
+  };
+  return {
+    skills: normalizeSkillCapabilities(value(0, "skills")),
+    plugins: normalizePluginCapabilities(value(1, "plugins")),
+    apps: normalizeAppCapabilities(value(2, "apps")),
+    mcpServers: normalizeMcpCapabilities(value(3, "mcp")),
+    errors,
+  };
+}
+
+function normalizeFileSearchResults(result: Record<string, unknown>): FileSearchResult[] {
+  const files = Array.isArray(result.files) ? result.files : [];
+  return files
+    .filter((file): file is Record<string, unknown> => Boolean(file && typeof file === "object"))
+    .map((file) => ({
+      root: stringValue(file.root),
+      path: stringValue(file.path),
+      fileName: stringValue(file.file_name) || path.basename(stringValue(file.path)),
+      score: typeof file.score === "number" ? file.score : undefined,
+    }))
+    .filter((file) => file.path)
+    .slice(0, 20);
+}
+
 function accessParams(accessMode: AccessModeId) {
   if (accessMode === "full") {
     return {
@@ -464,6 +603,12 @@ class SharedBridge {
         bridges.delete(this.bridgeKey);
       }
     });
+  }
+
+  dispose() {
+    this.upstream.close();
+    for (const client of this.clients) client.close();
+    this.clients.clear();
   }
 
   handleClientMessage(data: RawData) {
@@ -678,7 +823,7 @@ class SharedBridge {
 
   private prompt(text: string, options: BridgeClientMessage & { type: "prompt" }) {
     const cleanText = text.trim();
-    if (!cleanText && !options.attachments?.length) return;
+    if (!cleanText && !options.attachments?.length && !options.mentions?.length) return;
     if (!this.ready || !this.threadId) {
       this.emit({ type: "error", entry: newEntry("error", "Thread の準備がまだ完了していません。") });
       return;
@@ -710,13 +855,16 @@ class SharedBridge {
     }
 
     const attachmentText = imageInputs.length ? `\n\n添付画像: ${imageInputs.length}件` : "";
-    const userEntry = newEntry("user", `${text || "画像を確認してください。"}${attachmentText}`);
+    const mentionInputs = promptMentions(message.mentions || []);
+    const mentionText = mentionInputs.length ? `\n\n参照ファイル: ${mentionInputs.map((mention) => mention.path).join(", ")}` : "";
+    const userEntry = newEntry("user", `${text || "添付/参照を確認してください。"}${attachmentText}${mentionText}`);
     this.history.push(userEntry);
     this.emit({ type: "user", entry: userEntry });
 
     const access = accessParams(message.options.accessMode);
     const input = [
       ...(text ? [{ type: "text", text, text_elements: [] }] : []),
+      ...mentionInputs,
       ...imageInputs,
     ];
     const params = {
@@ -825,6 +973,35 @@ function createApp(phoneToken: string) {
     });
   });
 
+  app.get("/api/capabilities", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const results = await Promise.allSettled([
+      appServerRequest("skills/list", { cwds: [workdir], forceReload: false }),
+      appServerRequest("plugin/list", { cwds: [workdir], marketplaceKinds: ["local", "workspace-directory", "shared-with-me"] }),
+      appServerRequest("app/list", { limit: 100, forceRefetch: false }),
+      appServerRequest("mcpServerStatus/list", { limit: 100, detail: "toolsAndAuthOnly" }),
+    ]);
+    return c.json(normalizeCapabilities(results));
+  });
+
+  app.get("/api/files/search", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const query = (c.req.query("q") || "").trim();
+    if (!query) return c.json({ data: [] });
+    try {
+      const result = await appServerRequest("fuzzyFileSearch", {
+        query,
+        roots: [workdir],
+        cancellationToken: null,
+      });
+      return c.json({ data: normalizeFileSearchResults(result) });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
   app.get("/api/threads", async (c) => {
     const authError = requireAuth(c, phoneToken);
     if (authError) return authError;
@@ -886,7 +1063,67 @@ function createApp(phoneToken: string) {
     if (!threadId) return c.json({ error: "threadId is required" }, 400);
     try {
       await appServerRequest("thread/archive", { threadId });
+      bridges.get(threadId)?.dispose();
+      bridges.delete(threadId);
       return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
+  app.post("/api/thread/compact", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const threadId = typeof body.threadId === "string" ? body.threadId : "";
+    if (!threadId) return c.json({ error: "threadId is required" }, 400);
+    try {
+      await appServerRequest("thread/compact/start", { threadId });
+      bridges.get(threadId)?.dispose();
+      bridges.delete(threadId);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
+  app.post("/api/thread/fork", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const threadId = typeof body.threadId === "string" ? body.threadId : "";
+    if (!threadId) return c.json({ error: "threadId is required" }, 400);
+    try {
+      const result = await appServerRequest("thread/fork", {
+        threadId,
+        model: defaultModel,
+        cwd: workdir,
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        persistExtendedHistory: false,
+        excludeTurns: false,
+      });
+      const thread = (result.thread || {}) as Record<string, unknown>;
+      return c.json({ threadId: String(thread.id || ""), history: historyFromThread(thread) });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
+  app.post("/api/thread/rollback", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const threadId = typeof body.threadId === "string" ? body.threadId : "";
+    const numTurns = Number(body.numTurns || 1);
+    if (!threadId) return c.json({ error: "threadId is required" }, 400);
+    if (!Number.isInteger(numTurns) || numTurns < 1 || numTurns > 20) return c.json({ error: "numTurns must be 1-20" }, 400);
+    try {
+      const result = await appServerRequest("thread/rollback", { threadId, numTurns });
+      bridges.get(threadId)?.dispose();
+      bridges.delete(threadId);
+      const thread = (result.thread || {}) as Record<string, unknown>;
+      return c.json({ threadId: String(thread.id || threadId), history: historyFromThread(thread) });
     } catch (error) {
       return c.json({ error: toError(error).message }, 500);
     }

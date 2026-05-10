@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
+  Boxes,
   Check,
   ChevronDown,
+  FileSearch,
+  GitFork,
   ImagePlus,
   Menu,
+  Minimize2,
   PanelLeft,
   Pencil,
+  Plug,
   Plus,
   RefreshCcw,
+  Search,
   Send,
   Shield,
+  Sparkles,
   Square,
   Trash2,
+  Undo2,
+  Wrench,
   X,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -23,8 +32,12 @@ import type {
   ApprovalDecision,
   BridgeClientMessage,
   BridgeServerMessage,
+  CapabilityItem,
+  CapabilitySummary,
   ChatEntry,
+  FileSearchResult,
   PromptAttachment,
+  PromptMention,
   ReasoningEffort,
   RunState,
   ServerInfo,
@@ -46,6 +59,8 @@ type ModelOption = {
   inputModalities: string[];
   isDefault: boolean;
 };
+
+type CapabilityTab = "skills" | "plugins" | "apps" | "mcpServers";
 
 const initialParams = new URLSearchParams(window.location.search);
 const initialToken = initialParams.get("token") || localStorage.getItem("codexRemoteToken") || "";
@@ -437,14 +452,89 @@ function ApprovalDetails({ info }: { info: ApprovalInfo }) {
   );
 }
 
+const capabilityTabs: Array<{ id: CapabilityTab; label: string; icon: typeof Sparkles }> = [
+  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "plugins", label: "Plugins", icon: Boxes },
+  { id: "apps", label: "Apps", icon: Plug },
+  { id: "mcpServers", label: "MCP", icon: Wrench },
+];
+
+function CapabilityPanel({
+  summary,
+  loading,
+  activeTab,
+  onTab,
+  onRefresh,
+}: {
+  summary: CapabilitySummary | null;
+  loading: boolean;
+  activeTab: CapabilityTab;
+  onTab: (tab: CapabilityTab) => void;
+  onRefresh: () => void;
+}) {
+  const items: CapabilityItem[] = summary?.[activeTab] || [];
+  return (
+    <section className="capability-panel" aria-label="Capabilities">
+      <div className="capability-header">
+        <strong>Tools</strong>
+        <button className="mini-icon-button" type="button" onClick={onRefresh} aria-label="Tools を更新">
+          <RefreshCcw size={14} />
+        </button>
+      </div>
+      <div className="capability-tabs">
+        {capabilityTabs.map((tab) => {
+          const Icon = tab.icon;
+          const count = summary?.[tab.id]?.length || 0;
+          return (
+            <button type="button" className={activeTab === tab.id ? "active" : ""} key={tab.id} onClick={() => onTab(tab.id)}>
+              <Icon size={13} />
+              <span>{tab.label}</span>
+              <b>{count}</b>
+            </button>
+          );
+        })}
+      </div>
+      <div className="capability-list">
+        {loading && <div className="capability-empty">読み込み中</div>}
+        {!loading &&
+          items.map((item) => (
+            <article className="capability-item" key={item.id}>
+              <div>
+                <strong>{item.title}</strong>
+                {item.subtitle && <span>{item.subtitle}</span>}
+              </div>
+              {item.description && <p>{item.description}</p>}
+              {item.meta.length > 0 && (
+                <div className="capability-meta">
+                  {item.meta.slice(0, 4).map((meta) => (
+                    <span key={meta}>{meta}</span>
+                  ))}
+                </div>
+              )}
+            </article>
+          ))}
+        {!loading && items.length === 0 && <div className="capability-empty">なし</div>}
+      </div>
+      {!loading && summary?.errors && summary.errors.length > 0 && <div className="capability-error">{summary.errors[0]}</div>}
+    </section>
+  );
+}
+
 function App() {
   const [token] = useState(initialToken);
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [capabilities, setCapabilities] = useState<CapabilitySummary | null>(null);
+  const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>("skills");
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState(initialThread);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
+  const [mentions, setMentions] = useState<PromptMention[]>([]);
+  const [fileQuery, setFileQuery] = useState("");
+  const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
+  const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [search, setSearch] = useState("");
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
@@ -454,6 +544,7 @@ function App() {
   const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort>(isReasoningEffort(initialEffort) ? initialEffort : "medium");
   const [pendingApproval, setPendingApproval] = useState<unknown>(null);
   const [lastError, setLastError] = useState(token ? "" : "token がありません。");
+  const [threadBusy, setThreadBusy] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const assistantIdRef = useRef<string>("");
   const reasoningIdRef = useRef<string>("");
@@ -558,6 +649,19 @@ function App() {
       setModels(next);
     } catch {
       setModels([]);
+    }
+  }, [token]);
+
+  const loadCapabilities = useCallback(async () => {
+    if (!token) return;
+    setCapabilityLoading(true);
+    try {
+      const result = await apiGet<CapabilitySummary>("/api/capabilities", token);
+      setCapabilities(result);
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCapabilityLoading(false);
     }
   }, [token]);
 
@@ -680,9 +784,10 @@ function App() {
     if (!token) return;
     void loadThreads();
     void loadModels();
+    void loadCapabilities();
     connect(initialThread);
     return () => wsRef.current?.close();
-  }, [connect, loadModels, loadThreads, token]);
+  }, [connect, loadCapabilities, loadModels, loadThreads, token]);
 
   useEffect(() => {
     if (!models.length) return;
@@ -708,6 +813,34 @@ function App() {
   useEffect(() => {
     localStorage.setItem("codexRemoteEffort", selectedEffort);
   }, [selectedEffort]);
+
+  useEffect(() => {
+    if (!token) return;
+    const query = fileQuery.trim();
+    if (query.length < 2) {
+      setFileMatches([]);
+      setFileSearchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setFileSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void apiGet<{ data: FileSearchResult[] }>(`/api/files/search?q=${encodeURIComponent(query)}`, token)
+        .then((result) => {
+          if (!cancelled) setFileMatches(result.data);
+        })
+        .catch((error) => {
+          if (!cancelled) setLastError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (!cancelled) setFileSearchLoading(false);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fileQuery, token]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
@@ -738,14 +871,26 @@ function App() {
     }
   };
 
+  const addMention = (file: FileSearchResult) => {
+    const mention: PromptMention = {
+      id: `${file.root}:${file.path}`,
+      name: file.fileName || file.path,
+      path: file.path,
+    };
+    setMentions((current) => (current.some((item) => item.path === mention.path) ? current : [...current, mention].slice(0, 12)));
+    setFileQuery("");
+    setFileMatches([]);
+  };
+
   const sendPrompt = () => {
     const text = prompt.trim();
     const ws = wsRef.current;
-    if ((!text && attachments.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if ((!text && attachments.length === 0 && mentions.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
     const message: BridgeClientMessage = {
       type: "prompt",
       text,
       attachments,
+      mentions,
       options: {
         accessMode,
         model: selectedModel || undefined,
@@ -755,6 +900,7 @@ function App() {
     ws.send(JSON.stringify(message));
     setPrompt("");
     setAttachments([]);
+    setMentions([]);
   };
 
   const decideApproval = (decision: ApprovalDecision) => {
@@ -803,6 +949,65 @@ function App() {
     }
   };
 
+  const compactThread = async () => {
+    if (!token || !selectedThreadId || threadBusy) return;
+    if (!window.confirm("この thread を compact しますか?")) return;
+    setThreadBusy(true);
+    try {
+      await apiPost<{ ok: true }>("/api/thread/compact", token, { threadId: selectedThreadId });
+      connect(selectedThreadId);
+      setLastError("");
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const forkThread = async () => {
+    if (!token || !selectedThreadId || threadBusy) return;
+    setThreadBusy(true);
+    try {
+      const result = await apiPost<{ threadId: string; history: ChatEntry[] }>("/api/thread/fork", token, { threadId: selectedThreadId });
+      if (result.threadId) {
+        setSelectedThreadId(result.threadId);
+        updateThreadUrl(result.threadId);
+        setMessages(result.history);
+        connect(result.threadId);
+        void loadThreads();
+      }
+      setLastError("");
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
+  const rollbackThread = async () => {
+    if (!token || !selectedThreadId || threadBusy) return;
+    const raw = window.prompt("何 turn 戻しますか?", "1");
+    if (!raw) return;
+    const numTurns = Number(raw);
+    if (!Number.isInteger(numTurns) || numTurns < 1) {
+      setLastError("rollback する turn 数は 1 以上の整数にしてください。");
+      return;
+    }
+    if (!window.confirm(`最後の ${numTurns} turn を削除します。ローカルファイル変更は戻りません。続けますか?`)) return;
+    setThreadBusy(true);
+    try {
+      const result = await apiPost<{ threadId: string; history: ChatEntry[] }>("/api/thread/rollback", token, { threadId: selectedThreadId, numTurns });
+      setMessages(result.history);
+      connect(result.threadId || selectedThreadId);
+      void loadThreads();
+      setLastError("");
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThreadBusy(false);
+    }
+  };
+
   return (
     <main className="app-shell">
       <button
@@ -835,6 +1040,14 @@ function App() {
           <span>検索</span>
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="thread / project" />
         </label>
+
+        <CapabilityPanel
+          summary={capabilities}
+          loading={capabilityLoading}
+          activeTab={capabilityTab}
+          onTab={setCapabilityTab}
+          onRefresh={() => void loadCapabilities()}
+        />
 
         <div className="thread-list" aria-label="Threads">
           {filteredThreads.map((thread) => (
@@ -881,6 +1094,15 @@ function App() {
             )}
             {selectedThreadId && (
               <>
+                <button className="icon-button" type="button" onClick={() => void compactThread()} disabled={threadBusy} aria-label="compact">
+                  <Minimize2 size={16} />
+                </button>
+                <button className="icon-button" type="button" onClick={() => void forkThread()} disabled={threadBusy} aria-label="fork">
+                  <GitFork size={16} />
+                </button>
+                <button className="icon-button danger" type="button" onClick={() => void rollbackThread()} disabled={threadBusy} aria-label="rollback">
+                  <Undo2 size={16} />
+                </button>
                 <button className="icon-button" type="button" onClick={() => void renameThread()} aria-label="名前を変更">
                   <Pencil size={16} />
                 </button>
@@ -984,6 +1206,42 @@ function App() {
             </div>
           </div>
 
+          <div className="file-mention-row">
+            <label className="file-search-box">
+              <Search size={14} />
+              <input value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} placeholder="参照ファイルを検索" />
+            </label>
+            {fileSearchLoading && <span className="file-search-state">検索中</span>}
+            {fileMatches.length > 0 && (
+              <div className="file-results">
+                {fileMatches.map((file) => (
+                  <button type="button" key={`${file.root}:${file.path}`} onClick={() => addMention(file)}>
+                    <FileSearch size={14} />
+                    <span>{file.path}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {mentions.length > 0 && (
+            <div className="mention-strip" aria-label="参照ファイル">
+              {mentions.map((mention) => (
+                <div className="mention-chip" key={mention.id}>
+                  <FileSearch size={14} />
+                  <span>{mention.path}</span>
+                  <button
+                    type="button"
+                    aria-label={`${mention.name} を削除`}
+                    onClick={() => setMentions((current) => current.filter((item) => item.id !== mention.id))}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {attachments.length > 0 && (
             <div className="attachment-strip" aria-label="添付画像">
               {attachments.map((attachment) => (
@@ -1028,7 +1286,7 @@ function App() {
                 onChange={(event) => void addAttachments(event.currentTarget.files, event.currentTarget)}
               />
             </label>
-            <button className="send-button" type="button" onClick={sendPrompt} disabled={(!prompt.trim() && attachments.length === 0) || runState === "connecting"}>
+            <button className="send-button" type="button" onClick={sendPrompt} disabled={(!prompt.trim() && attachments.length === 0 && mentions.length === 0) || runState === "connecting"}>
               <Send size={18} />
             </button>
           </div>
