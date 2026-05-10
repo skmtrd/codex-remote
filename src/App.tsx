@@ -440,6 +440,7 @@ function App() {
   const [lastError, setLastError] = useState(token ? "" : "token がありません。");
   const wsRef = useRef<WebSocket | null>(null);
   const assistantIdRef = useRef<string>("");
+  const reasoningIdRef = useRef<string>("");
   const logRef = useRef<HTMLDivElement | null>(null);
 
   const selectedThread = useMemo(
@@ -505,6 +506,19 @@ function App() {
     });
   }, []);
 
+  const appendReasoningDelta = useCallback((delta: string) => {
+    if (!delta) return;
+    setMessages((current) => {
+      const last = current[current.length - 1];
+      if (last && last.role === "reasoning" && last.id === reasoningIdRef.current) {
+        return current.map((entry) => (entry.id === last.id ? { ...entry, text: entry.text + delta } : entry));
+      }
+      const next = makeLocalEntry("reasoning", delta);
+      reasoningIdRef.current = next.id;
+      return [...current, next].slice(-180);
+    });
+  }, []);
+
   const loadThreads = useCallback(async () => {
     if (!token) return;
     try {
@@ -541,6 +555,7 @@ function App() {
 
       wsRef.current?.close();
       assistantIdRef.current = "";
+      reasoningIdRef.current = "";
       setPendingApproval(null);
       setMessages([]);
       setRunState("connecting");
@@ -570,12 +585,18 @@ function App() {
         }
         if (msg.type === "user") {
           assistantIdRef.current = "";
+          reasoningIdRef.current = "";
           appendEntry(msg.entry);
           setRunState("running");
           return;
         }
         if (msg.type === "assistantDelta") {
           appendAssistantDelta(msg.text);
+          setRunState("streaming");
+          return;
+        }
+        if (msg.type === "reasoningDelta") {
+          appendReasoningDelta(msg.text);
           setRunState("streaming");
           return;
         }
@@ -594,6 +615,7 @@ function App() {
         }
         if (msg.type === "turn" && msg.status === "completed") {
           assistantIdRef.current = "";
+          reasoningIdRef.current = "";
           setRunState("done");
           setPendingApproval(null);
           void loadThreads();
@@ -615,7 +637,7 @@ function App() {
         setLastError("WebSocket 接続に失敗しました。");
       });
     },
-    [appendAssistantDelta, appendEntry, loadThreads, token, updateThreadUrl],
+    [appendAssistantDelta, appendEntry, appendReasoningDelta, loadThreads, token, updateThreadUrl],
   );
 
   useEffect(() => {
@@ -835,7 +857,7 @@ function App() {
           )}
           {messages.map((entry) => (
             <article className={`message ${entry.role}`} key={entry.id}>
-              <div className="message-role">{entry.role === "assistant" ? "Codex" : entry.role === "user" ? "You" : "System"}</div>
+              <div className="message-role">{entry.role === "assistant" ? "Codex" : entry.role === "user" ? "You" : entry.role === "reasoning" ? "Thinking" : "System"}</div>
               <div className="message-body">
                 <MessageText entry={entry} />
               </div>

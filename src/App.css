@@ -470,6 +470,17 @@
   white-space: pre-wrap;
 }
 
+.message.reasoning .message-body {
+  border-color: #d8e2ee;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+}
+
+.message.reasoning .message-role {
+  color: #64748b;
+}
+
 .message.error .message-body {
   border-color: #fecaca;
   background: #fff1f2;

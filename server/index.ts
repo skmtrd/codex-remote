@@ -275,6 +275,31 @@ function summarizeLiveItem(item: unknown, phase: "started" | "completed") {
   return "";
 }
 
+function summarizePlanUpdate(params: Record<string, unknown>) {
+  const plan = Array.isArray(params.plan) ? params.plan : [];
+  if (plan.length === 0) return "";
+  const explanation = typeof params.explanation === "string" && params.explanation.trim() ? `${params.explanation.trim()}\n` : "";
+  const steps = plan
+    .map((step) => {
+      if (!step || typeof step !== "object") return "";
+      const record = step as Record<string, unknown>;
+      const label = record.status === "completed" ? "[x]" : record.status === "inProgress" ? "[>]" : "[ ]";
+      return `${label} ${String(record.step || "")}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  return steps ? `Plan updated\n${explanation}${steps}` : "";
+}
+
+function summarizeDiffUpdate(params: Record<string, unknown>) {
+  const diff = typeof params.diff === "string" ? params.diff.trim() : "";
+  if (!diff) return "";
+  const files = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].map((match) => match[2] || match[1]);
+  const fileSummary = files.length ? files.slice(0, 8).map((file) => `- ${file}`).join("\n") : diff.split("\n").slice(0, 8).join("\n");
+  const suffix = files.length > 8 ? `\n...and ${files.length - 8} more` : "";
+  return `Diff updated (${files.length || 1} file${files.length === 1 ? "" : "s"})\n${fileSummary}${suffix}`;
+}
+
 function historyFromThread(thread: Record<string, unknown>): ChatEntry[] {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const history: ChatEntry[] = [];
@@ -545,6 +570,24 @@ class SharedBridge {
       if (msg.method === "item/agentMessage/delta") {
         const delta = typeof msg.params?.delta === "string" ? msg.params.delta : "";
         if (delta) this.emit({ type: "assistantDelta", text: delta });
+        return;
+      }
+
+      if (msg.method === "item/reasoning/summaryTextDelta") {
+        const delta = typeof msg.params?.delta === "string" ? msg.params.delta : "";
+        if (delta) this.emit({ type: "reasoningDelta", text: delta });
+        return;
+      }
+
+      if (msg.method === "turn/plan/updated") {
+        const text = summarizePlanUpdate(msg.params || {});
+        if (text) this.emit({ type: "status", entry: newEntry("status", text) });
+        return;
+      }
+
+      if (msg.method === "turn/diff/updated") {
+        const text = summarizeDiffUpdate(msg.params || {});
+        if (text) this.emit({ type: "status", entry: newEntry("status", text) });
         return;
       }
 

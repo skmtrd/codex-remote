@@ -9,7 +9,7 @@ export type RunState =
   | "offline"
   | "error";
 
-export type ChatRole = "user" | "assistant" | "status" | "error";
+export type ChatRole = "user" | "assistant" | "reasoning" | "status" | "error";
 
 export type ChatEntry = {
   id: string;
@@ -85,6 +85,10 @@ export type BridgeServerMessage =
     }
   | {
       type: "assistantDelta";
+      text: string;
+    }
+  | {
+      type: "reasoningDelta";
       text: string;
     }
   | {
