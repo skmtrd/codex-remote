@@ -444,12 +444,20 @@
   gap: 10px;
 }
 
+.model-controls {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
 .select-control {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  max-width: min(360px, 60vw);
+  min-width: 0;
   min-height: 34px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -459,12 +467,21 @@
   font-size: 12px;
 }
 
+.model-control {
+  flex: 1 1 260px;
+}
+
+.effort-control {
+  flex: 0 1 170px;
+}
+
 .select-control span {
   color: var(--muted);
 }
 
 .select-control select {
-  max-width: 210px;
+  min-width: 0;
+  max-width: 100%;
   border: 0;
   background: transparent;
   color: var(--text-strong);
@@ -634,6 +651,10 @@
     align-items: center;
   }
 
+  .model-controls {
+    flex-wrap: nowrap;
+  }
+
   .select-control {
     max-width: none;
     flex: 1 1 auto;
@@ -641,7 +662,7 @@
   }
 
   .select-control select {
-    max-width: 42vw;
+    max-width: 100%;
   }
 
   .access-tabs {
@@ -663,6 +684,11 @@
   .control-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(116px, 148px);
   }
 
   .access-tabs {

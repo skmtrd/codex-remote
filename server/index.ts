@@ -16,6 +16,7 @@ import {
   type BridgeClientMessage,
   type BridgeServerMessage,
   type ChatEntry,
+  type ReasoningEffort,
   type ThreadSummary,
 } from "../shared/protocol.js";
 
@@ -308,6 +309,10 @@ function accessParams(accessMode: AccessModeId) {
   };
 }
 
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return ["none", "minimal", "low", "medium", "high", "xhigh"].includes(String(value));
+}
+
 async function warmHistory(threadId: string) {
   await appServerRequest("thread/read", { threadId, includeTurns: true });
   await appServerRequest("thread/list", {
@@ -548,6 +553,7 @@ class SharedBridge {
       threadId: this.threadId,
       input: [{ type: "text", text, text_elements: [] }],
       ...(message.options.model ? { model: message.options.model } : {}),
+      ...(isReasoningEffort(message.options.effort) ? { effort: message.options.effort } : {}),
       approvalPolicy: access.approvalPolicy,
       sandboxPolicy: access.sandboxPolicy,
     };

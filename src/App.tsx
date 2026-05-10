@@ -15,20 +15,33 @@ import type {
   BridgeClientMessage,
   BridgeServerMessage,
   ChatEntry,
+  ReasoningEffort,
   RunState,
   ServerInfo,
   ThreadSummary,
 } from "../shared/protocol.js";
 import "./App.css";
 
+type ReasoningEffortOption = {
+  id: ReasoningEffort;
+  description?: string;
+};
+
 type ModelOption = {
   id: string;
   label: string;
+  description?: string;
+  defaultReasoningEffort: ReasoningEffort;
+  supportedReasoningEfforts: ReasoningEffortOption[];
+  inputModalities: string[];
+  isDefault: boolean;
 };
 
 const initialParams = new URLSearchParams(window.location.search);
 const initialToken = initialParams.get("token") || localStorage.getItem("codexRemoteToken") || "";
 const initialThread = initialParams.get("thread") || "";
+const initialModel = localStorage.getItem("codexRemoteModel") || "";
+const initialEffort = localStorage.getItem("codexRemoteEffort") || "";
 
 const runStateLabel: Record<RunState, string> = {
   booting: "起動中",
@@ -47,6 +60,41 @@ const accessModes: Array<{ id: AccessModeId; label: string; short: string }> = [
   { id: "full", label: "フルアクセス", short: "フル" },
   { id: "read-only", label: "読み取り専用", short: "読取" },
 ];
+
+const reasoningEfforts: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
+const fallbackReasoningOptions: ReasoningEffortOption[] = reasoningEfforts.map((id) => ({ id }));
+const reasoningLabels: Record<ReasoningEffort, string> = {
+  none: "なし",
+  minimal: "最小",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "最高",
+};
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return reasoningEfforts.includes(value as ReasoningEffort);
+}
+
+function parseReasoningEffortOption(value: unknown): ReasoningEffortOption | null {
+  if (isReasoningEffort(value)) return { id: value };
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (!isReasoningEffort(record.reasoningEffort)) return null;
+  return {
+    id: record.reasoningEffort,
+    description: typeof record.description === "string" ? record.description : undefined,
+  };
+}
+
+function uniqueReasoningOptions(options: ReasoningEffortOption[]) {
+  const seen = new Set<ReasoningEffort>();
+  return options.filter((option) => {
+    if (seen.has(option.id)) return false;
+    seen.add(option.id);
+    return true;
+  });
+}
 
 function makeLocalEntry(role: ChatEntry["role"], text: string): ChatEntry {
   return {
@@ -93,6 +141,32 @@ function compactId(id: string) {
   return id.length > 14 ? `${id.slice(0, 7)}...${id.slice(-5)}` : id;
 }
 
+function parseModelOption(item: Record<string, unknown>): ModelOption | null {
+  const id = String(item.model || item.id || "");
+  const label = String(item.displayName || item.model || item.id || "");
+  if (!id || !label) return null;
+
+  const parsedEfforts = Array.isArray(item.supportedReasoningEfforts)
+    ? uniqueReasoningOptions(item.supportedReasoningEfforts.map(parseReasoningEffortOption).filter((option): option is ReasoningEffortOption => Boolean(option)))
+    : [];
+  const defaultReasoningEffort = isReasoningEffort(item.defaultReasoningEffort)
+    ? item.defaultReasoningEffort
+    : parsedEfforts[0]?.id || "medium";
+  const supportedReasoningEfforts = parsedEfforts.length ? parsedEfforts : fallbackReasoningOptions;
+
+  return {
+    id,
+    label,
+    description: typeof item.description === "string" ? item.description : undefined,
+    defaultReasoningEffort,
+    supportedReasoningEfforts,
+    inputModalities: Array.isArray(item.inputModalities)
+      ? item.inputModalities.filter((value): value is string => typeof value === "string")
+      : [],
+    isDefault: Boolean(item.isDefault),
+  };
+}
+
 function App() {
   const [token] = useState(initialToken);
   const [info, setInfo] = useState<ServerInfo | null>(null);
@@ -105,7 +179,8 @@ function App() {
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accessMode, setAccessMode] = useState<AccessModeId>("review");
-  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedModel, setSelectedModel] = useState(initialModel);
+  const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort>(isReasoningEffort(initialEffort) ? initialEffort : "medium");
   const [pendingApproval, setPendingApproval] = useState<unknown>(null);
   const [lastError, setLastError] = useState(token ? "" : "token がありません。");
   const wsRef = useRef<WebSocket | null>(null);
@@ -126,6 +201,25 @@ function App() {
   }, [search, threads]);
 
   const currentTitle = selectedThread?.title || (selectedThreadId ? compactId(selectedThreadId) : "新しい thread");
+  const selectedModelOption = useMemo(() => models.find((model) => model.id === selectedModel), [models, selectedModel]);
+  const selectedEffortOptions = useMemo(
+    () => selectedModelOption?.supportedReasoningEfforts || fallbackReasoningOptions,
+    [selectedModelOption],
+  );
+  const modelOptions = useMemo(() => {
+    if (!selectedModel || models.some((model) => model.id === selectedModel)) return models;
+    return [
+      {
+        id: selectedModel,
+        label: selectedModel,
+        defaultReasoningEffort: selectedEffort,
+        supportedReasoningEfforts: fallbackReasoningOptions,
+        inputModalities: [],
+        isDefault: false,
+      },
+      ...models,
+    ];
+  }, [models, selectedEffort, selectedModel]);
 
   const updateThreadUrl = useCallback((threadId: string) => {
     const next = new URL(window.location.href);
@@ -169,11 +263,8 @@ function App() {
       const raw = Array.isArray(result.data) ? result.data : [];
       const next = raw
         .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-        .map((item) => ({
-          id: String(item.model || item.id || ""),
-          label: String(item.displayName || item.model || item.id || ""),
-        }))
-        .filter((item) => item.id && item.label)
+        .map(parseModelOption)
+        .filter((item): item is ModelOption => Boolean(item))
         .slice(0, 30);
       setModels(next);
     } catch {
@@ -283,7 +374,7 @@ function App() {
     void apiGet<ServerInfo>("/api/info")
       .then((result) => {
         setInfo(result);
-        setSelectedModel(result.model);
+        setSelectedModel((current) => current || result.model);
       })
       .catch((error) => setLastError(error instanceof Error ? error.message : String(error)));
   }, []);
@@ -295,6 +386,31 @@ function App() {
     connect(initialThread);
     return () => wsRef.current?.close();
   }, [connect, loadModels, loadThreads, token]);
+
+  useEffect(() => {
+    if (!models.length) return;
+    setSelectedModel((current) => {
+      if (current && models.some((model) => model.id === current)) return current;
+      return models.find((model) => model.isDefault)?.id || info?.model || models[0]?.id || current;
+    });
+  }, [info?.model, models]);
+
+  useEffect(() => {
+    setSelectedEffort((current) => {
+      if (selectedEffortOptions.some((option) => option.id === current)) return current;
+      const preferred = selectedModelOption?.defaultReasoningEffort;
+      if (preferred && selectedEffortOptions.some((option) => option.id === preferred)) return preferred;
+      return selectedEffortOptions[0]?.id || "medium";
+    });
+  }, [selectedEffortOptions, selectedModelOption]);
+
+  useEffect(() => {
+    if (selectedModel) localStorage.setItem("codexRemoteModel", selectedModel);
+  }, [selectedModel]);
+
+  useEffect(() => {
+    localStorage.setItem("codexRemoteEffort", selectedEffort);
+  }, [selectedEffort]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
@@ -317,6 +433,7 @@ function App() {
       options: {
         accessMode,
         model: selectedModel || undefined,
+        effort: selectedEffort,
       },
     };
     ws.send(JSON.stringify(message));
@@ -396,7 +513,7 @@ function App() {
           </button>
           <div className="thread-heading">
             <h1>{currentTitle}</h1>
-            <p>{info ? `${info.model} · ${projectName(info.workdir)}` : "Codex app-server"}</p>
+            <p>{info ? `${selectedModel || info.model} · Thinking ${reasoningLabels[selectedEffort]} · ${projectName(info.workdir)}` : "Codex app-server"}</p>
           </div>
           <div className="topbar-actions">
             <span className={`run-pill ${runState}`}>
@@ -454,20 +571,30 @@ function App() {
 
         <footer className="composer-shell">
           <div className="control-row">
-            <label className="select-control">
-              <span>Model</span>
-              <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
-                {selectedModel && <option value={selectedModel}>{selectedModel}</option>}
-                {models
-                  .filter((model) => model.id !== selectedModel)
-                  .map((model) => (
+            <div className="model-controls">
+              <label className="select-control model-control">
+                <span>Model</span>
+                <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
+                  {modelOptions.map((model) => (
                     <option value={model.id} key={model.id}>
                       {model.label}
                     </option>
                   ))}
-              </select>
-              <ChevronDown size={15} />
-            </label>
+                </select>
+                <ChevronDown size={15} />
+              </label>
+              <label className="select-control effort-control">
+                <span>Thinking</span>
+                <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value as ReasoningEffort)}>
+                  {selectedEffortOptions.map((option) => (
+                    <option value={option.id} key={option.id} title={option.description}>
+                      {reasoningLabels[option.id]}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={15} />
+              </label>
+            </div>
             <div className="access-tabs" aria-label="Access mode">
               {accessModes.map((mode) => (
                 <button

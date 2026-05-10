@@ -37,8 +37,11 @@ export type ServerInfo = {
 
 export type AccessModeId = "full" | "review" | "read-only";
 
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export type PromptOptions = {
   model?: string;
+  effort?: ReasoningEffort;
   accessMode: AccessModeId;
 };
 
