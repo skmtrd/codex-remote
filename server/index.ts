@@ -48,6 +48,8 @@ const codexEndpoint =
 const managedCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdir = process.env.CODEX_WORKDIR || projectRoot;
 const defaultModel = process.env.CODEX_MODEL || "gpt-5.5";
+const defaultApprovalPolicy = "never";
+const defaultSandbox = "danger-full-access";
 const tokenPath = path.join(projectRoot, ".codex-remote-token");
 const uploadRoot = path.join(projectRoot, ".uploads");
 const bridges = new Map<string, SharedBridge>();
@@ -678,8 +680,8 @@ class SharedBridge {
         ...(this.requestedThreadId ? { threadId: this.requestedThreadId } : {}),
         model: defaultModel,
         cwd: workdir,
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
+        approvalPolicy: defaultApprovalPolicy,
+        sandbox: defaultSandbox,
       });
       this.emit({
         type: "status",
@@ -1029,8 +1031,8 @@ function createApp(phoneToken: string) {
         threadId,
         model: defaultModel,
         cwd: workdir,
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
+        approvalPolicy: defaultApprovalPolicy,
+        sandbox: defaultSandbox,
       });
       const thread = (result.thread || {}) as Record<string, unknown>;
       return c.json({ threadId: String(thread.id || threadId), history: historyFromThread(thread) });
@@ -1098,8 +1100,8 @@ function createApp(phoneToken: string) {
         threadId,
         model: defaultModel,
         cwd: workdir,
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
+        approvalPolicy: defaultApprovalPolicy,
+        sandbox: defaultSandbox,
         persistExtendedHistory: false,
         excludeTurns: false,
       });
