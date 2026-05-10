@@ -300,6 +300,32 @@ function summarizeDiffUpdate(params: Record<string, unknown>) {
   return `Diff updated (${files.length || 1} file${files.length === 1 ? "" : "s"})\n${fileSummary}${suffix}`;
 }
 
+function summarizeNotice(method: string, params: Record<string, unknown>) {
+  if (method === "model/rerouted") {
+    return `Model rerouted\n${String(params.fromModel || "unknown")} -> ${String(params.toModel || "unknown")}\nReason: ${String(params.reason || "unknown")}`;
+  }
+  if (method === "model/verification") {
+    const verifications = Array.isArray(params.verifications) ? params.verifications.map(String) : [];
+    return verifications.length ? `Model verification\n${verifications.join(", ")}` : "";
+  }
+  if (method === "warning" || method === "guardianWarning") {
+    const message = typeof params.message === "string" ? params.message : "";
+    return message ? `Warning\n${message}` : "";
+  }
+  if (method === "configWarning") {
+    const summary = typeof params.summary === "string" ? params.summary : "";
+    const details = typeof params.details === "string" && params.details.trim() ? `\n${params.details.trim()}` : "";
+    const filePath = typeof params.path === "string" ? `\n${params.path}` : "";
+    return summary ? `Config warning\n${summary}${details}${filePath}` : "";
+  }
+  if (method === "deprecationNotice") {
+    const summary = typeof params.summary === "string" ? params.summary : "";
+    const details = typeof params.details === "string" && params.details.trim() ? `\n${params.details.trim()}` : "";
+    return summary ? `Deprecation notice\n${summary}${details}` : "";
+  }
+  return "";
+}
+
 function historyFromThread(thread: Record<string, unknown>): ChatEntry[] {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const history: ChatEntry[] = [];
@@ -587,6 +613,19 @@ class SharedBridge {
 
       if (msg.method === "turn/diff/updated") {
         const text = summarizeDiffUpdate(msg.params || {});
+        if (text) this.emit({ type: "status", entry: newEntry("status", text) });
+        return;
+      }
+
+      if (
+        msg.method === "model/rerouted" ||
+        msg.method === "model/verification" ||
+        msg.method === "warning" ||
+        msg.method === "guardianWarning" ||
+        msg.method === "configWarning" ||
+        msg.method === "deprecationNotice"
+      ) {
+        const text = summarizeNotice(msg.method, msg.params || {});
         if (text) this.emit({ type: "status", entry: newEntry("status", text) });
         return;
       }
