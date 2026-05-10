@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
   Check,
   ChevronDown,
   ImagePlus,
   Menu,
   PanelLeft,
+  Pencil,
   Plus,
   RefreshCcw,
   Send,
@@ -148,6 +150,20 @@ async function apiGet<T>(path: string, token?: string): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
     headers: token ? authHeaders(token) : undefined,
+  });
+  const result = (await response.json()) as T & { error?: string };
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return result;
+}
+
+async function apiPost<T>(path: string, token: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
   const result = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
@@ -757,6 +773,36 @@ function App() {
     ws.send(JSON.stringify(message));
   };
 
+  const renameThread = async () => {
+    if (!token || !selectedThreadId) return;
+    const name = window.prompt("Thread name", currentTitle)?.trim();
+    if (!name || name === currentTitle) return;
+    try {
+      await apiPost<{ ok: true }>("/api/thread/name", token, { threadId: selectedThreadId, name });
+      setThreads((current) => current.map((thread) => (thread.id === selectedThreadId ? { ...thread, title: name } : thread)));
+      setLastError("");
+      void loadThreads();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const archiveThread = async () => {
+    if (!token || !selectedThreadId) return;
+    if (!window.confirm("この thread をアーカイブしますか?")) return;
+    try {
+      await apiPost<{ ok: true }>("/api/thread/archive", token, { threadId: selectedThreadId });
+      setThreads((current) => current.filter((thread) => thread.id !== selectedThreadId));
+      setSelectedThreadId("");
+      updateThreadUrl("");
+      connect("");
+      setLastError("");
+      void loadThreads();
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <main className="app-shell">
       <button
@@ -832,6 +878,16 @@ function App() {
               <button className="icon-button danger" type="button" onClick={interruptTurn} aria-label="停止">
                 <Square size={15} />
               </button>
+            )}
+            {selectedThreadId && (
+              <>
+                <button className="icon-button" type="button" onClick={() => void renameThread()} aria-label="名前を変更">
+                  <Pencil size={16} />
+                </button>
+                <button className="icon-button danger" type="button" onClick={() => void archiveThread()} aria-label="アーカイブ">
+                  <Archive size={16} />
+                </button>
+              </>
             )}
             <button className="icon-button" type="button" onClick={() => connect(selectedThreadId)} aria-label="再接続">
               <RefreshCcw size={17} />

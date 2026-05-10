@@ -823,6 +823,36 @@ function createApp(phoneToken: string) {
     }
   });
 
+  app.post("/api/thread/name", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const threadId = typeof body.threadId === "string" ? body.threadId : "";
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!threadId) return c.json({ error: "threadId is required" }, 400);
+    if (!name) return c.json({ error: "name is required" }, 400);
+    try {
+      await appServerRequest("thread/name/set", { threadId, name });
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
+  app.post("/api/thread/archive", async (c) => {
+    const authError = requireAuth(c, phoneToken);
+    if (authError) return authError;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const threadId = typeof body.threadId === "string" ? body.threadId : "";
+    if (!threadId) return c.json({ error: "threadId is required" }, 400);
+    try {
+      await appServerRequest("thread/archive", { threadId });
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ error: toError(error).message }, 500);
+    }
+  });
+
   app.get("/api/models", async (c) => {
     const authError = requireAuth(c, phoneToken);
     if (authError) return authError;

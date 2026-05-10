@@ -955,8 +955,8 @@
 }
 
 @media (max-width: 520px) {
-  .topbar-actions .icon-button:not(.mobile-menu) {
-    display: none;
+  .topbar-actions {
+    gap: 4px;
   }
 
   .thread-heading h1 {
