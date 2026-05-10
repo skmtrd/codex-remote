@@ -47,7 +47,7 @@ const codexEndpoint =
   process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
 const managedCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdir = process.env.CODEX_WORKDIR || projectRoot;
-const defaultModel = process.env.CODEX_MODEL || "gpt-5.4";
+const defaultModel = process.env.CODEX_MODEL || "gpt-5.5";
 const tokenPath = path.join(projectRoot, ".codex-remote-token");
 const uploadRoot = path.join(projectRoot, ".uploads");
 const bridges = new Map<string, SharedBridge>();

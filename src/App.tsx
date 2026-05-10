@@ -16,7 +16,6 @@ import {
   Search,
   Send,
   Shield,
-  Sparkles,
   Square,
   Trash2,
   Undo2,
@@ -57,10 +56,12 @@ type ModelOption = {
 };
 
 const initialParams = new URLSearchParams(window.location.search);
+const defaultModel = "gpt-5.5";
+const defaultEffort: ReasoningEffort = "xhigh";
 const initialToken = initialParams.get("token") || localStorage.getItem("codexRemoteToken") || "";
 const initialThread = initialParams.get("thread") || "";
-const initialModel = localStorage.getItem("codexRemoteModel") || "";
-const initialEffort = localStorage.getItem("codexRemoteEffort") || "";
+const initialModel = localStorage.getItem("codexRemoteModelV3") || defaultModel;
+const initialEffort = localStorage.getItem("codexRemoteEffortV3") || defaultEffort;
 
 const runStateLabel: Record<RunState, string> = {
   booting: "起動中",
@@ -75,8 +76,8 @@ const runStateLabel: Record<RunState, string> = {
 };
 
 const accessModes: Array<{ id: AccessModeId; label: string; short: string }> = [
+  { id: "full", label: "完全に許可", short: "許可" },
   { id: "review", label: "確認モード", short: "確認" },
-  { id: "full", label: "フルアクセス", short: "フル" },
   { id: "read-only", label: "読み取り専用", short: "読取" },
 ];
 
@@ -505,9 +506,9 @@ function App() {
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openProjects, setOpenProjects] = useState<Set<string>>(() => new Set());
-  const [accessMode, setAccessMode] = useState<AccessModeId>("review");
+  const [accessMode, setAccessMode] = useState<AccessModeId>("full");
   const [selectedModel, setSelectedModel] = useState(initialModel);
-  const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort>(isReasoningEffort(initialEffort) ? initialEffort : "medium");
+  const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort>(isReasoningEffort(initialEffort) ? initialEffort : defaultEffort);
   const [pendingApproval, setPendingApproval] = useState<unknown>(null);
   const [lastError, setLastError] = useState(token ? "" : "token がありません。");
   const [threadBusy, setThreadBusy] = useState(false);
@@ -753,8 +754,10 @@ function App() {
   useEffect(() => {
     if (!models.length) return;
     setSelectedModel((current) => {
+      if (current === defaultModel) return current;
       if (current && models.some((model) => model.id === current)) return current;
-      return models.find((model) => model.isDefault)?.id || info?.model || models[0]?.id || current;
+      const preferred = models.find((model) => model.id === defaultModel || model.label.includes("5.5"));
+      return preferred?.id || models.find((model) => model.isDefault)?.id || info?.model || models[0]?.id || current;
     });
   }, [info?.model, models]);
 
@@ -768,11 +771,11 @@ function App() {
   }, [selectedEffortOptions, selectedModelOption]);
 
   useEffect(() => {
-    if (selectedModel) localStorage.setItem("codexRemoteModel", selectedModel);
+    if (selectedModel) localStorage.setItem("codexRemoteModelV3", selectedModel);
   }, [selectedModel]);
 
   useEffect(() => {
-    localStorage.setItem("codexRemoteEffort", selectedEffort);
+    localStorage.setItem("codexRemoteEffortV3", selectedEffort);
   }, [selectedEffort]);
 
   useEffect(() => {
@@ -1111,7 +1114,6 @@ function App() {
           {messages.length === 0 && (
             <div className="empty-state">
               <Shield size={24} />
-              <span>{runState === "connecting" ? "接続しています" : "Codex Remote"}</span>
             </div>
           )}
           {messageBlocks.map((block) => {
@@ -1250,7 +1252,6 @@ function App() {
                   />
                 </label>
                 <label className="select-control access-control">
-                  <Shield size={14} />
                   <select value={accessMode} onChange={(event) => setAccessMode(event.target.value as AccessModeId)}>
                     {accessModes.map((mode) => (
                       <option value={mode.id} key={mode.id}>
@@ -1258,13 +1259,11 @@ function App() {
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={14} />
                 </label>
               </div>
 
               <div className="composer-toolbar-right">
                 <label className="select-control model-control">
-                  <span>Model</span>
                   <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
                     {modelOptions.map((model) => (
                       <option value={model.id} key={model.id}>
@@ -1272,10 +1271,8 @@ function App() {
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={14} />
                 </label>
                 <label className="select-control effort-control">
-                  <Sparkles size={14} />
                   <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value as ReasoningEffort)}>
                     {selectedEffortOptions.map((option) => (
                       <option value={option.id} key={option.id} title={option.description}>
@@ -1283,7 +1280,6 @@ function App() {
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={14} />
                 </label>
                 <button
                   className="send-button"
