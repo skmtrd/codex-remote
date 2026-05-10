@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
-  Boxes,
   Check,
   ChevronDown,
   FileSearch,
@@ -12,7 +11,6 @@ import {
   Minimize2,
   PanelLeft,
   Pencil,
-  Plug,
   Plus,
   RefreshCcw,
   Search,
@@ -22,7 +20,6 @@ import {
   Square,
   Trash2,
   Undo2,
-  Wrench,
   X,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -33,8 +30,6 @@ import type {
   ApprovalDecision,
   BridgeClientMessage,
   BridgeServerMessage,
-  CapabilityItem,
-  CapabilitySummary,
   ChatEntry,
   FileSearchResult,
   PromptAttachment,
@@ -60,8 +55,6 @@ type ModelOption = {
   inputModalities: string[];
   isDefault: boolean;
 };
-
-type CapabilityTab = "skills" | "plugins" | "apps" | "mcpServers";
 
 const initialParams = new URLSearchParams(window.location.search);
 const initialToken = initialParams.get("token") || localStorage.getItem("codexRemoteToken") || "";
@@ -202,6 +195,11 @@ function relativeTime(value?: number) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}時間`;
   return `${Math.floor(hours / 24)}日`;
+}
+
+function threadUpdatedMs(thread: ThreadSummary) {
+  const value = thread.updatedAt || 0;
+  return value && value < 10_000_000_000 ? value * 1000 : value;
 }
 
 function compactId(id: string) {
@@ -385,6 +383,44 @@ function MessageText({ entry }: { entry: ChatEntry }) {
   );
 }
 
+type MessageBlock =
+  | { type: "entry"; entry: ChatEntry }
+  | { type: "statusGroup"; id: string; entries: ChatEntry[] };
+
+function summarizeStatusEntries(entries: ChatEntry[]) {
+  const texts = entries.map((entry) => entry.text);
+  const diffCount = texts.filter((text) => /Diff updated|file changes|file patch|ファイル|変更|updated/i.test(text)).length;
+  const commandCount = texts.filter((text) => /^\s*\$/.test(text) || /command|コマンド/i.test(text)).length;
+  const readCount = texts.filter((text) => /^Read\s+/i.test(text)).length;
+  const parts: string[] = [];
+  if (diffCount) parts.push(`${diffCount}件のファイル更新`);
+  if (readCount) parts.push(`${readCount}個のファイル調査`);
+  if (commandCount) parts.push(`${commandCount}件のコマンド実行`);
+  return parts.length ? parts.join("、") : `${entries.length}件の作業ログ`;
+}
+
+function groupMessageBlocks(entries: ChatEntry[]) {
+  const blocks: MessageBlock[] = [];
+  let statusEntries: ChatEntry[] = [];
+  const flushStatus = () => {
+    if (statusEntries.length) {
+      blocks.push({ type: "statusGroup", id: statusEntries[0].id, entries: statusEntries });
+      statusEntries = [];
+    }
+  };
+
+  for (const entry of entries) {
+    if (entry.role === "status") {
+      statusEntries.push(entry);
+      continue;
+    }
+    flushStatus();
+    blocks.push({ type: "entry", entry });
+  }
+  flushStatus();
+  return blocks;
+}
+
 function ApprovalDetails({ info }: { info: ApprovalInfo }) {
   return (
     <div className="approval-content">
@@ -453,82 +489,11 @@ function ApprovalDetails({ info }: { info: ApprovalInfo }) {
   );
 }
 
-const capabilityTabs: Array<{ id: CapabilityTab; label: string; icon: typeof Sparkles }> = [
-  { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "plugins", label: "Plugins", icon: Boxes },
-  { id: "apps", label: "Apps", icon: Plug },
-  { id: "mcpServers", label: "MCP", icon: Wrench },
-];
-
-function CapabilityPanel({
-  summary,
-  loading,
-  activeTab,
-  onTab,
-  onRefresh,
-}: {
-  summary: CapabilitySummary | null;
-  loading: boolean;
-  activeTab: CapabilityTab;
-  onTab: (tab: CapabilityTab) => void;
-  onRefresh: () => void;
-}) {
-  const items: CapabilityItem[] = summary?.[activeTab] || [];
-  return (
-    <section className="capability-panel" aria-label="Capabilities">
-      <div className="capability-header">
-        <strong>Tools</strong>
-        <button className="mini-icon-button" type="button" onClick={onRefresh} aria-label="Tools を更新">
-          <RefreshCcw size={14} />
-        </button>
-      </div>
-      <div className="capability-tabs">
-        {capabilityTabs.map((tab) => {
-          const Icon = tab.icon;
-          const count = summary?.[tab.id]?.length || 0;
-          return (
-            <button type="button" className={activeTab === tab.id ? "active" : ""} key={tab.id} onClick={() => onTab(tab.id)}>
-              <Icon size={13} />
-              <span>{tab.label}</span>
-              <b>{count}</b>
-            </button>
-          );
-        })}
-      </div>
-      <div className="capability-list">
-        {loading && <div className="capability-empty">読み込み中</div>}
-        {!loading &&
-          items.map((item) => (
-            <article className="capability-item" key={item.id}>
-              <div>
-                <strong>{item.title}</strong>
-                {item.subtitle && <span>{item.subtitle}</span>}
-              </div>
-              {item.description && <p>{item.description}</p>}
-              {item.meta.length > 0 && (
-                <div className="capability-meta">
-                  {item.meta.slice(0, 4).map((meta) => (
-                    <span key={meta}>{meta}</span>
-                  ))}
-                </div>
-              )}
-            </article>
-          ))}
-        {!loading && items.length === 0 && <div className="capability-empty">なし</div>}
-      </div>
-      {!loading && summary?.errors && summary.errors.length > 0 && <div className="capability-error">{summary.errors[0]}</div>}
-    </section>
-  );
-}
-
 function App() {
   const [token] = useState(initialToken);
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [capabilities, setCapabilities] = useState<CapabilitySummary | null>(null);
-  const [capabilityTab, setCapabilityTab] = useState<CapabilityTab>("skills");
-  const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState(initialThread);
   const [messages, setMessages] = useState<ChatEntry[]>([]);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
@@ -537,9 +502,9 @@ function App() {
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [search, setSearch] = useState("");
   const [runState, setRunState] = useState<RunState>(token ? "booting" : "error");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [openProjects, setOpenProjects] = useState<Set<string>>(() => new Set());
   const [accessMode, setAccessMode] = useState<AccessModeId>("review");
   const [selectedModel, setSelectedModel] = useState(initialModel);
   const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort>(isReasoningEffort(initialEffort) ? initialEffort : "medium");
@@ -557,26 +522,23 @@ function App() {
     [selectedThreadId, threads],
   );
 
-  const filteredThreads = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return threads;
-    return threads.filter((thread) =>
-      [thread.title, thread.cwd || "", thread.preview || "", thread.id].some((value) => value.toLowerCase().includes(query)),
-    );
-  }, [search, threads]);
-
   const groupedThreads = useMemo(() => {
     const groups = new Map<string, ThreadSummary[]>();
-    for (const thread of filteredThreads) {
+    for (const thread of threads) {
       const name = projectName(thread.cwd);
       groups.set(name, [...(groups.get(name) || []), thread]);
     }
     return [...groups.entries()]
-      .map(([name, items]) => ({ name, items }))
-      .sort((left, right) => left.name.localeCompare(right.name));
-  }, [filteredThreads]);
+      .map(([name, items]) => ({
+        name,
+        items: [...items].sort((left, right) => threadUpdatedMs(right) - threadUpdatedMs(left)),
+        updatedAt: Math.max(...items.map(threadUpdatedMs), 0),
+      }))
+      .sort((left, right) => right.updatedAt - left.updatedAt || left.name.localeCompare(right.name));
+  }, [threads]);
 
   const currentTitle = selectedThread?.title || (selectedThreadId ? compactId(selectedThreadId) : "新しい thread");
+  const messageBlocks = useMemo(() => groupMessageBlocks(messages), [messages]);
   const selectedModelOption = useMemo(() => models.find((model) => model.id === selectedModel), [models, selectedModel]);
   const selectedEffortOptions = useMemo(
     () => selectedModelOption?.supportedReasoningEfforts || fallbackReasoningOptions,
@@ -662,19 +624,6 @@ function App() {
       setModels(next);
     } catch {
       setModels([]);
-    }
-  }, [token]);
-
-  const loadCapabilities = useCallback(async () => {
-    if (!token) return;
-    setCapabilityLoading(true);
-    try {
-      const result = await apiGet<CapabilitySummary>("/api/capabilities", token);
-      setCapabilities(result);
-    } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCapabilityLoading(false);
     }
   }, [token]);
 
@@ -797,10 +746,9 @@ function App() {
     if (!token) return;
     void loadThreads();
     void loadModels();
-    void loadCapabilities();
     connect(initialThread);
     return () => wsRef.current?.close();
-  }, [connect, loadCapabilities, loadModels, loadThreads, token]);
+  }, [connect, loadModels, loadThreads, token]);
 
   useEffect(() => {
     if (!models.length) return;
@@ -855,9 +803,11 @@ function App() {
     };
   }, [fileQuery, token]);
 
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  useLayoutEffect(() => {
+    const log = logRef.current;
+    if (!log) return;
+    log.scrollTop = log.scrollHeight;
+  }, [messages, selectedThreadId]);
 
   useEffect(() => {
     const textarea = promptRef.current;
@@ -868,6 +818,15 @@ function App() {
     textarea.style.height = `${Math.max(nextHeight, 58)}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [prompt]);
+
+  const toggleProject = (project: string) => {
+    setOpenProjects((current) => {
+      const next = new Set(current);
+      if (next.has(project)) next.delete(project);
+      else next.add(project);
+      return next;
+    });
+  };
 
   const selectThread = (threadId: string) => {
     setSelectedThreadId(threadId);
@@ -1059,38 +1018,32 @@ function App() {
           <span>新しい thread</span>
         </button>
 
-        <label className="search-box">
-          <span>検索</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="thread / project" />
-        </label>
-
-        <CapabilityPanel
-          summary={capabilities}
-          loading={capabilityLoading}
-          activeTab={capabilityTab}
-          onTab={setCapabilityTab}
-          onRefresh={() => void loadCapabilities()}
-        />
-
         <div className="thread-list" aria-label="Threads">
           {groupedThreads.map((group) => (
-            <section className="project-stack" key={group.name}>
-              <div className="project-stack-heading">
+            <section className={`project-stack ${openProjects.has(group.name) ? "open" : "collapsed"}`} key={group.name}>
+              <button
+                className="project-stack-heading"
+                type="button"
+                aria-expanded={openProjects.has(group.name)}
+                onClick={() => toggleProject(group.name)}
+              >
                 <Folder size={15} />
                 <span>{group.name}</span>
                 <b>{group.items.length}</b>
-              </div>
-              {group.items.map((thread) => (
-                <button
-                  className={`thread-row ${thread.id === selectedThreadId ? "active" : ""}`}
-                  type="button"
-                  key={thread.id}
-                  onClick={() => selectThread(thread.id)}
-                >
-                  <span className="thread-title">{thread.title}</span>
-                  <span className="thread-meta">{thread.updatedAt ? relativeTime(thread.updatedAt) : compactId(thread.id)}</span>
-                </button>
-              ))}
+                <ChevronDown className="project-chevron" size={14} />
+              </button>
+              {openProjects.has(group.name) &&
+                group.items.map((thread) => (
+                  <button
+                    className={`thread-row ${thread.id === selectedThreadId ? "active" : ""}`}
+                    type="button"
+                    key={thread.id}
+                    onClick={() => selectThread(thread.id)}
+                  >
+                    <span className="thread-title">{thread.title}</span>
+                    <span className="thread-meta">{thread.updatedAt ? relativeTime(thread.updatedAt) : compactId(thread.id)}</span>
+                  </button>
+                ))}
             </section>
           ))}
           {groupedThreads.length === 0 && <div className="empty-list">thread なし</div>}
@@ -1109,7 +1062,6 @@ function App() {
           </button>
           <div className="thread-heading">
             <h1>{currentTitle}</h1>
-            <p>{info ? `${selectedModel || info.model} · Thinking ${reasoningLabels[selectedEffort]} · ${projectName(info.workdir)}` : "Codex app-server"}</p>
           </div>
           <div className="topbar-actions">
             <span className={`run-pill ${runState}`}>
@@ -1162,14 +1114,32 @@ function App() {
               <span>{runState === "connecting" ? "接続しています" : "Codex Remote"}</span>
             </div>
           )}
-          {messages.map((entry) => (
-            <article className={`message ${entry.role}`} key={entry.id}>
-              <div className="message-role">{entry.role === "assistant" ? "Codex" : entry.role === "user" ? "You" : entry.role === "reasoning" ? "Thinking" : "System"}</div>
-              <div className="message-body">
-                <MessageText entry={entry} />
-              </div>
-            </article>
-          ))}
+          {messageBlocks.map((block) => {
+            if (block.type === "statusGroup") {
+              return (
+                <article className="message status status-group" key={block.id}>
+                  <details className="status-details">
+                    <summary>
+                      <span className="status-summary-text">{summarizeStatusEntries(block.entries)}</span>
+                      <span className="status-count">{block.entries.length}件</span>
+                    </summary>
+                    <ul className="status-list">
+                      {block.entries.map((entry) => (
+                        <li key={entry.id}>{entry.text}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </article>
+              );
+            }
+            return (
+              <article className={`message ${block.entry.role}`} key={block.entry.id}>
+                <div className="message-body">
+                  <MessageText entry={block.entry} />
+                </div>
+              </article>
+            );
+          })}
         </div>
 
         {pendingApproval !== null && (

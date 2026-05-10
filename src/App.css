@@ -298,12 +298,23 @@
 
 .project-stack-heading {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-height: 28px;
+  border: 0;
+  border-radius: 8px;
   padding: 0 8px;
+  background: transparent;
   color: var(--muted);
+  text-align: left;
+}
+
+.project-stack-heading:hover,
+.project-stack.open .project-stack-heading {
+  background: var(--hover);
+  color: var(--text-strong);
 }
 
 .project-stack-heading span {
@@ -317,6 +328,14 @@
 .project-stack-heading b {
   color: rgba(244, 238, 249, 0.5);
   font-size: 11px;
+}
+
+.project-chevron {
+  transition: transform 160ms ease;
+}
+
+.project-stack.collapsed .project-chevron {
+  transform: rotate(-90deg);
 }
 
 .thread-row {
@@ -511,46 +530,36 @@
 }
 
 .message {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 760px);
-  gap: 14px;
-  align-items: start;
+  width: min(100%, 820px);
+  margin: 0 auto;
 }
 
 .message.user {
-  grid-template-columns: minmax(0, 760px) 72px;
-  justify-content: end;
-}
-
-.message.user .message-role {
-  grid-column: 2;
-  grid-row: 1;
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .message.user .message-body {
-  grid-column: 1;
-  grid-row: 1;
+  width: fit-content;
+  max-width: min(720px, 78%);
+  border: 1px solid rgba(143, 184, 255, 0.28);
   border-color: rgba(143, 184, 255, 0.28);
-  background: rgba(68, 85, 128, 0.2);
-}
-
-.message-role {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  border-radius: 16px;
+  padding: 13px 15px;
+  background: rgba(68, 85, 128, 0.24);
+  box-shadow: 0 10px 24px rgba(10, 8, 16, 0.14);
 }
 
 .message-body {
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px 14px;
-  background: var(--surface);
   color: var(--text-strong);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.62;
   overflow-wrap: anywhere;
+}
+
+.message.assistant .message-body {
+  max-width: 100%;
 }
 
 .message-body > :first-child,
@@ -644,28 +653,79 @@
   font-weight: 650;
 }
 
-.message.status .message-body {
-  border-color: rgba(251, 146, 60, 0.28);
-  background: rgba(124, 45, 18, 0.2);
-  color: #fed7aa;
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: pre-wrap;
+.message.status {
+  color: var(--muted);
 }
 
 .message.reasoning .message-body {
-  border-color: rgba(229, 221, 239, 0.09);
-  background: rgba(244, 238, 249, 0.045);
   color: var(--muted-strong);
   font-size: 13px;
 }
 
-.message.reasoning .message-role {
+.status-details {
+  min-width: 0;
   color: var(--muted);
+}
+
+.status-details summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  min-height: 30px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.status-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.status-details summary::after {
+  content: "⌄";
+  color: var(--muted);
+  font-size: 14px;
+  transition: transform 160ms ease;
+}
+
+.status-details[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.status-summary-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.status-count {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(244, 238, 249, 0.07);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-list {
+  margin: 8px 0 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font: 12px/1.75 var(--mono);
+}
+
+.status-list li {
+  padding-left: 4px;
+  white-space: pre-wrap;
 }
 
 .message.error .message-body {
   border-color: rgba(252, 165, 165, 0.28);
+  border: 1px solid rgba(252, 165, 165, 0.28);
+  border-radius: 8px;
+  padding: 12px 14px;
   background: rgba(127, 29, 29, 0.28);
   color: #fecaca;
   white-space: pre-wrap;
@@ -1215,20 +1275,9 @@
     padding: 16px 12px 230px;
   }
 
-  .message,
-  .message.user {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .message.user .message-role,
   .message.user .message-body {
-    grid-column: auto;
-    grid-row: auto;
+    max-width: 86%;
     text-align: left;
-  }
-
-  .message-role {
-    padding-left: 2px;
   }
 
   .approval-panel {
